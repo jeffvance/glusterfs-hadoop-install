@@ -1,0 +1,22 @@
+#
+# This is an exmaple of a possible "hosts" cluster (trusted pool) definition
+# file. Each line consists of the ip address and its hostname -- one pair per
+# line. The reason for requiring both the hostname and IP address is because
+# install.sh appends hostname and ip to the /etc/hosts file on each storage
+# node to set up IP -> host name resolution.
+#
+# The order of the entries below will be how Gluster builds the volume. This
+# example is for a 4 node cluster where files will be both distributed and
+# replicated. The order you specify the entries determines how they will be
+# replicated, so in the example below, the first 2 systems will be mirrors of
+# each other, and the second 2 systems will be mirrors of each other. Files
+# will be evenly distributed across these mirror pairs.
+
+192.168.122.51 hostname-1  # This could be the "install-from" node
+192.168.122.52 hostname-2
+192.168.122.53 hostname-3
+192.168.122.54 hostname-4
+
+# The above order, combined with a replica count of 2, causes hostname-1 and
+# hostname-2 to be replica pairs, and hostname-3 and hostname-4 to be replica
+# pairs.

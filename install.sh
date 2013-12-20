@@ -940,7 +940,8 @@ BRICK_MNT=$BRICK_DIR/$VOLNAME
 MAPRED_SCRATCH_DIR="$BRICK_DIR/mapredlocal"    # xfs but not distributed
 MAPRED_SYSTEM_DIR="$GLUSTER_MNT/mapred/system" # distributed, not local
 # all sub-directories that are related to the install
-SUBDIRS="$(find ./* -type d | grep -v devutils)" # exclude devutils/
+SUBDIRS="$(find ./* -type d -not -path "*/devutils")" # exclude devutils/
+SUBDIRS=${SUBDIRS//$'\n'/ } # replace newline with space
 
 echo
 display "-- Verifying the deploy environment, including the \"hosts\" file format:" $LOG_INFO

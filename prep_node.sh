@@ -11,16 +11,11 @@
 #
 # This script does the following on the host (this) node:
 #  - modifes /etc/hosts to include all hosts ip/hostname for the cluster
-#  - verifies the FUSE patch has been installed, or installs it
 #  - sets up the sudoers file
 #  - ensures that ntp is running correctly
 #  - disables the firewall via iptables
-#
-# Additionally, depending on the contents of the tarball (see devutils/
-# mk_tarball), this script may install the following:
-#  - gluster-hadoop plug-in jar file,
-#  - FUSE kernel patch,
-#  - ktune.sh performance script
+#  - install the gluster-hadoop plugin, if present in any of the subdirectories
+#    from which install.sh is run.
 #
 # Lastly, if there are specific shell scripts within any sub-directories found
 # under the deployment dir, they are executed (and passed the same args as
@@ -54,7 +49,7 @@ LOGFILE="${_ARGS[PREP_LOG]}" # needed by display()
 DEPLOY_DIR="${_ARGS[REMOTE_DIR]}"
 HOSTS=($2)
 HOST_IPS=($3)
-echo -e "*** $(basename $0) 1=$1\n1=$(declare -p _ARGS),\n2=${HOSTS[@]},\n3=${HOST_IPS[@]}"
+#echo -e "*** $(basename $0) 1=$1\n1=$(declare -p _ARGS),\n2=${HOSTS[@]},\n3=${HOST_IPS[@]}"
 
 NUMNODES=${#HOSTS[@]}
 
@@ -149,63 +144,6 @@ function verify_ntp(){
   # always returned if the above ntpd -qg cmd did a large time change. Thus, we
   # no longer call ntpstat since the node will "realtively" soon sync up.
 }
-
-# verify_fuse: verify this node has the correct kernel FUSE patch, and if not
-# it will be installed and this node will need to be rebooted. Sets the global
-# REBOOT_REQUIRED variable if the fuse patch is installed.
-#
-function verify_fuse(){
-
-  local FUSE_TARBALL_RE='fuse-.*.tar.gz' # note: regexp not glob
-  local FUSE_TARBALL
-  local out; local err
-  local FUSE_CHK_CMD="rpm -q --changelog kernel-2.6.32-358.28.1.el6.x86_64 | less | head 20 | grep fuse"
-
-  out="$($FUSE_CHK_CMD)"
-  if [[ -n "$out" ]] ; then # assume fuse patch has been installed
-    display "   ... verified" $LOG_DEBUG
-    return
-  fi
-
-  display "   In theory the FUSE patch is needed..." $LOG_INFO
-
-  # set MATCH_DIR and MATCH_FILE vars if match
-  match_dir "$FUSE_TARBALL_RE" "$SUBDIR_FILES"
-  [[ -z "$MATCH_DIR" ]] && {
-	display "INFO: FUSE patch not supplied" $LOG_INFO;
-	return; }
-
-  cd $MATCH_DIR
-  FUSE_TARBALL=$MATCH_FILE
-
-  display "-- Installing FUSE patch via $FUSE_TARBALL ..." $LOG_INFO
-  echo
-  rm -rf fusetmp # scratch dir
-  mkdir fusetmp
-
-  out="$(tar -C fusetmp/ -xzf $FUSE_TARBALL 2>&1)"
-  err=$?
-  display "untar fuse: $out" $LOG_DEBUG
-  if (( err != 0 )) ; then
-    display "ERROR: untar fuse error $err" $LOG_FORCE
-    exit 13
-  fi
-
-  out="$(yum -y install fusetmp/*.rpm 2>&1)"
-  err=$?
-  display "fuse install: $out" $LOG_DEBUG
-  if (( err != 0 && err != 1 )) ; then # 1--> nothing to do
-    display "ERROR: fuse install error $err" $LOG_FORCE
-    exit 16
-  fi
-
-  display "   A reboot of $NODE is required and will be done automatically" \
-        $LOG_INFO
-  echo
-  REBOOT_REQUIRED=true
-  cd -
-}
-
 
 # sudoers: copy the packaged sudoers file to /etc/sudoers.d/ and set its
 # permissions. Note: it is ok if the sudoers file is not included in the
@@ -304,11 +242,6 @@ function install_storage(){
   echo
   display "-- Verifying GlusterFS installation:" $LOG_SUMMARY
   install_plugin
-
-  # verify FUSE patch on data (agent) nodes, if not installed yum install it
-  echo
-  display "-- Verifying FUSE patch installation:" $LOG_SUMMARY
-  verify_fuse
 }
 
 # install_mgmt: perform the installations steps needed when the node is the

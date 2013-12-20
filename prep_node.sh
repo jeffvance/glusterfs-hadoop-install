@@ -389,7 +389,6 @@ DIRS="$(find ./* -type d)"
 # format for SUBDIR_FILES:  "dir1/file1 dir1/dir2/file2...dir2/fileN ..."
 [[ -n "$DIRS" ]] &&
 	SUBDIR_FILES="$(find $DIRS -type f -not -executable)"
-echo -e "****DIRS=$DIRS \n SUBDIR_FILES=$SUBDIR_FILES"
 
 # remove special logfile, start "clean" each time script is invoked
 rm -f $LOGFILE

@@ -9,6 +9,10 @@
   glusterfs/ directory is omitted and a version-specific RHS directory (or
   directories) will be used.
 
+  NOTE: for rhs related installs the common files contained in this repo are
+    symlinked to via the FIRST_PREP_REPO.sh script, which *must* be run prior
+    to creating a deployment tarball.
+
   The glusterfs-hadoop-install git package consists of common (meaning the same
   steps needed on both fedora and Red Hat Storage, RHS) scripts and files, plus
   directories for specific installations. There is a fedora/ directory which

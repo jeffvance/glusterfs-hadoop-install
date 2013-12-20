@@ -249,10 +249,8 @@ function install_storage(){
 #
 function install_mgmt(){
 
-  echo
-  display "-- Management node is $NODE" $LOG_INFO
-  display "   Special management node processing, if any, will be done by scripts in sub-directories" $LOG_INFO
-
+  local err
+ 
   # nothing to do here (yet)...
 }
 

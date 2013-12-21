@@ -2,31 +2,13 @@
 
 == Overview ==
 
-  This top-level directory contains files and scripts common to all aspects of
-  preparing glusterfs volumes for Hadoop workloads. If the target is fedora or
-  other non Red Hat Storage (RHS) platorms then files under the "glusterfs/"
-  directory will are used. If the target is any version of RHS then the
-  glusterfs/ directory is omitted and a version-specific RHS directory (or
-  directories) will be used.
-
-  NOTE: for rhs related installs the common files contained in this repo are
-    symlinked to via the FIRST_PREP_REPO.sh script, which *must* be run prior
-    to creating a deployment tarball.
-
-  The glusterfs-hadoop-install git package consists of common (meaning the same
-  steps needed on both fedora and Red Hat Storage, RHS) scripts and files, plus
-  directories for specific installations. There is a fedora/ directory which
-  contains scripts and/or files specific to glusterfs on fedora. There is also
-  a rhs/ directory (and sub-directories) which contain files and/or scripts
-  needed to install and optimize RHS on RHEL.
-
-  It is expected that Red Hat is the main user involved with creating RHS-Hadoop
-  packages which will become available as patches and ultimately as included
-  components of RHS. For this case the fedora/ directory is ignored. Users 
-  installing glusterfs on fedroa will similarly ignore the rhs/ directory, which
-  is the default when install.sh is executed without the "--dirs" command
-  line option.
-
+  This top-level directory contains files and scripts common to both Red Hat  
+  Storage (RHS) and to non-RHS targets for the preparation of gluster volumes
+  for Hadoop workloads. If the target is fedora or other non-Red Hat Storage
+  (RHS) platorm then files under the "glusterfs/" directory are used. If the
+  target platform is RHS then there's more work to do, but the first step is
+  to clone the rhs-hadoop-install repo and read its README file(s).
+ 
   When packaging the glusterfs-hadoop-install package for fedora or RHS the
   goal is to create a tar.gz file containing only the files and sub-directories
   needed for the target installation. This tarball will NOT include all of the

@@ -10,8 +10,10 @@
 # as an initial step by ../prep_node.sh.
 #
 # This script does the following on the host (this) node:
-#  - install xfs if needed
-#  - install or update glusterfs if needed
+#  - installs xfs if needed
+#  - installs or update glusterfs if needed
+#  - installs openjdf if needed
+#  - installs and starts glusterfs 
 #
 # Arguments (all positional):
 #   $1=associative array, passed by *declaration*, containing many individual

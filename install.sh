@@ -131,16 +131,19 @@ EOF
   
 }
 
-# parse_cmd: getopt used to do general parsing. The brick-dev arg is required.
-# The remaining parms are optional. See usage function for syntax. Note: since
-# the logfile path is an option, parsing errors may be written to the default
-# logfile rather than the user-defined logfile, depending on when the error
-#  occurs.
+# parse_cmd: getopt is used to do general parsing. The brick-dev arg is
+# required. The remaining parms are optional. See usage function for syntax. 
+# The RHS_INSTALL variable must be set prior to calling this function.
+# Note: since the logfile path is an option, parsing errors may be written to
+#   the default logfile rather than the user-defined logfile, depending on when
+#   the error occurs.
 #
 function parse_cmd(){
 
   local OPTIONS='vhqy'
-  local LONG_OPTS='brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,rhn-user:,rhn-pass:,logfile:,verbose::,old-deploy,help,version,quiet,debug'
+  local LONG_OPTS='brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,old-deploy,help,version,quiet,debug'
+  [[ "$RHS_INSTALL" == true ]] && 
+	LONG_OPTS+=',rhn-user:,rhn-pass:'
 
   # defaults (global variables)
   BRICK_DIR='/mnt/brick1'

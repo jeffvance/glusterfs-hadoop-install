@@ -279,7 +279,7 @@ function execute_scripts(){
   echo
   [[ -z "$DIRS" ]] && return # no extra dirs so no extra scripts
 
-  display "--  $prefix execution (if any)..." $LOG_SUMMARY
+  display "-- $prefix execution (if any)..." $LOG_SUMMARY
 
   for dir in $DIRS ; do
       f="$dir/${prefix}_install.sh"

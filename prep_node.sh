@@ -283,7 +283,7 @@ function execute_scripts(){
 
   for dir in $DIRS ; do
       f="$dir/${prefix}_install.sh"
-      [[ -x $f ]] || continue
+      [[ -x "$f" ]] || continue
       display "Begin executing: $f ..." $LOG_INFO
       cd $dir
       ./$(basename $f) "$(declare -p _ARGS)" "$tmp1" "$tmp2"

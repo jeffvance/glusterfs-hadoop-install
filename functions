@@ -47,7 +47,7 @@ function fixup_etc_hosts_file(){
   done
   if (( ${#hosts_buf} > 2 )) ; then
     hosts_buf=${hosts_buf:0:${#hosts_buf}-1} # remove \n for last host entry
-    display "  appending \"$hosts_buf\" to /etc/hosts" $LOG_DEBUG
+    display "   appending: \"$hosts_buf\" to /etc/hosts" $LOG_DEBUG
     echo "$hosts_buf" >>/etc/hosts
   fi
 }

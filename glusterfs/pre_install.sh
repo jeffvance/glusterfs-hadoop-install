@@ -30,6 +30,7 @@
 
 # constants and args
 # note, delete the "declare -A name=" portion of arg
+VERSION='1.01'
 eval 'declare -A _ARGS='${1#*=}
 BRICK_DEV="${_ARGS[BRICK_DEV]}"
 STORAGE_INSTALL="${_ARGS[INST_STORAGE]}" # true or false
@@ -204,6 +205,7 @@ function install_mgmt(){
 # ** main ** #
 #            #
 echo
+echo "$(basename $0), version: $VERSION"
 
 [[ $STORAGE_INSTALL == true ]] && install_storage
 [[ $MGMT_INSTALL    == true ]] && install_mgmt

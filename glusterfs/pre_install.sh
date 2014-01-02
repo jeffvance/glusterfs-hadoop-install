@@ -53,26 +53,30 @@ function get_plugin(){
 
   local URL_PREFIX='http://rhbd.s3.amazonaws.com/maven/repositories/internal/org/apache/hadoop/fs/glusterfs/glusterfs-hadoop'
   local METADATA_URL="$URL_PREFIX/maven-metadata.xml"
-  local JAR_URL="$URL_PREFIX/<VERSION>/glusterfs-hadoop-<VERSION>.jar"
+  local JAR_PREFIX='glusterfs-hadoop-'; local JAR_SUFFIX='.jar'
+  local JAR_URL="$URL_PREFIX/<VERSION>/$JAR_PREFIX<VERSION>$JAR_SUFFIX"
   local JARXML='jarxml'
-  local jar=''; local jar_ver
+  local jar=''; local jar_ver; local out; local err
 
   # get xml metadata and extract latest version of jar: <latest>1.2.3</latest>
   wget -q -O $JARXML $METADATA_URL
-  jar_ver="$(grep -oPm1 "(?<=<latest>)[^<]+" $JARXML)"
-
-  # now jar_ver contains the most recent plugin jar version string
-  wget ${JAR_URL//<VERSION>/$jar_ver/}
-
-  jar=$(ls glusterfs-hadoop*.jar 2> /dev/null)
-  if [[ -z "$jar" ]] ; then
-    display "ERROR: gluster-hadoop plug-in missing in $DEPLOY_DIR" $LOG_FORCE
-    display "       attemped to retrieve JAR from $INDEX_URL/$jar_ver/" \
-        $LOG_FORCE
-    exit 2
+  if [[ $? != 0 || ! -f $JARXML ]] ; then
+    display "ERROR: cannot wget glusterfs-hadoop plugin metadata" $LOG_FORCE
+    exit 3
   fi
-  display "   glusterfs-hadoop plugin version $jar_ver copied to $PWD" \
-	$LOG_SUMMARY
+  jar_ver="$(grep -oPm1 "(?<=<latest>)[^<]+" $JARXML)" # 1.2.3
+
+  # wget latest plugin jar
+  jar="${JAR_PREFIX}${jar_ver}$JAR_SUFFIX"
+  out="$(wget ${JAR_URL//<VERSION>/$jar_ver} 2>&1)"
+  err=$?
+  display "wget plugin: $out" $LOG_DEBUG
+  if [[ $err != 0 || ! -f $jar ]] ; then
+    display "ERROR: cannot wget $jar plugin" $LOG_FORCE
+    exit 6
+  fi
+
+  display "   $jar plugin copied to $PWD" $LOG_SUMMARY
 }
 
 # install_openjdk: 
@@ -85,7 +89,7 @@ function install_openjdk(){
   err=$?
   display "install openjdk: $out"
   (( err == 0 )) || {
-	display "ERROR: openjdk not installed: $err" $LOG_FORCE; exit 5; }
+	display "ERROR: openjdk not installed: $err" $LOG_FORCE; exit 8; }
 }
 
 # verify_install_openjdk: 
@@ -105,7 +109,7 @@ function install_xfs(){
   err=$?
   display "install xfsprogs: $out"
   (( err == 0 )) || {
-	display "ERROR: XFS not installed: $err" $LOG_FORCE; exit 8; }
+	display "ERROR: XFS not installed: $err" $LOG_FORCE; exit 10; }
 }
 
 # verify_install_xfs: 
@@ -125,7 +129,7 @@ function install_glusterfs(){
   err=$?
   display "install glusterfs: $out"
   (( err == 0 )) || {
-	display "ERROR: glusterfs not installed: $err" $LOG_FORCE; exit 11; }
+	display "ERROR: glusterfs not installed: $err" $LOG_FORCE; exit 13; }
 }
 
 # start_glusterd:
@@ -146,7 +150,7 @@ function start_glusterd(){
   display "glusterd start: $out" $LOG_DEBUG
   if (( err != 0 )) ; then
     display "ERROR: glusterd start error $err" $LOG_FORCE
-    exit 14
+    exit 15
   fi
 
   # verify glusterd started

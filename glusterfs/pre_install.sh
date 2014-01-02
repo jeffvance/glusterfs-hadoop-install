@@ -45,27 +45,24 @@ HOST_IPS=($3)
 source ${DEPLOY_DIR}functions
 
 
-# get_plugin: wget the most recent gluster-hadoop plug-in from archiva or
-# s3 (moving off of archiva soon) and copy it to PWD. This is done by scraping
-# the main gluster-hadoop index page and getting the last href for the jar URL.
+# get_plugin: wget the most recent gluster-hadoop plug-in from s3 and copy it
+# to PWD. This is done by wget'ng the metadata file and extracting the latest
+# version string, then wget'ng this version of the jar file.
 #
 function get_plugin(){
 
-  local HTTP='http://23.23.239.119'
-  local INDEX_URL="$HTTP/archiva/browse/org.apache.hadoop.fs.glusterfs/glusterfs-hadoop" # note: will change when move to s3
-  local JAR_URL="$HTTP/archiva/repository/internal/org/apache/hadoop/fs/glusterfs/glusterfs-hadoop"
-  local JAR_SEARCH='<li><a href=\"/archiva/browse/org.apache.hadoop.fs.glusterfs'
-  local SCRAPE_FILE='plugin-index.txt'
-  local jar=''; local jar_ver; local out
+  local URL_PREFIX='http://rhbd.s3.amazonaws.com/maven/repositories/internal/org/apache/hadoop/fs/glusterfs/glusterfs-hadoop'
+  local METADATA_URL="$URL_PREFIX/maven-metadata.xml"
+  local JAR_URL="$URL_PREFIX/<VERSION>/glusterfs-hadoop-<VERSION>.jar"
+  local JARXML='jarxml'
+  local jar=''; local jar_ver
 
-  # get plugin index page and find the most current version, which is the last
-  # list element (<li><a href=...) on the index page
-  wget -q -O $SCRAPE_FILE $INDEX_URL
-  jar_ver=$(grep "$JAR_SEARCH" $SCRAPE_FILE | tail -n 1)
-  jar_ver=${jar_ver%;*}        # delete trailing ';jsessionid...</a></li>'
-  jar_ver=${jar_ver##*hadoop/} # delete from beginning to last "hadoop/"
+  # get xml metadata and extract latest version of jar: <latest>1.2.3</latest>
+  wget -q -O $JARXML $METADATA_URL
+  jar_ver="$(grep -oPm1 "(?<=<latest>)[^<]+" $JARXML)"
+
   # now jar_ver contains the most recent plugin jar version string
-  wget $JAR_URL/$jar_ver/glusterfs-hadoop-$jar_ver.jar
+  wget ${JAR_URL//<VERSION>/$jar_ver/}
 
   jar=$(ls glusterfs-hadoop*.jar 2> /dev/null)
   if [[ -z "$jar" ]] ; then
@@ -74,7 +71,8 @@ function get_plugin(){
         $LOG_FORCE
     exit 2
   fi
-  display "   glusterfs-hadoop plugin copied to $PWD" $LOG_SUMMARY
+  display "   glusterfs-hadoop plugin version $jar_ver copied to $PWD" \
+	$LOG_SUMMARY
 }
 
 # install_openjdk: 

@@ -156,7 +156,8 @@ function parse_cmd(){
   MGMT_NODE=''
   RHN_USER=''
   RHN_PASS=''
-  LOGFILE='/var/log/rhs-hadoop-install.log'
+  [[ "$RHS_INSTALL" == true ]] && LOGFILE='/var/log/rhs-hadoop-install.log' ||
+	LOGFILE='/var/log/glusterfs-hadoop-install.log' 
   VERBOSE=$LOG_SUMMARY
   ANS_YES='n'
 

@@ -7,24 +7,28 @@
   for Hadoop workloads. If the target is fedora or other non-Red Hat Storage
   (RHS) platorm then files under the "glusterfs/" directory are used. If the
   target platform is RHS then there's more work to do, but the first step is
-  to clone the rhs-hadoop-install repo and read its README file(s).
- 
-  When packaging the glusterfs-hadoop-install package for fedora or RHS the
-  goal is to create a tar.gz file containing only the files and sub-directories
-  needed for the target installation. This tarball will NOT include all of the
-  files available in the glusterfs-hadoop-install repo, but rather just those
-  files, scripts, and sub-directories needed for the target install.
-  ./devutils/mk_tarball.sh is a helper script for creating a package tarball. If
-  installing directly from a git clone the common install.sh "--dirs" option is
-  required when the target deployment is RHS.
+  to clone the rhs-hadoop-install repo and read its README file(s). Read the
+  RHS README files for more information on creating RHS specific tarballs and
+  preparting rhs for Hadoop jobs. 
 
-  Each sub-directory can contain a script named "pre_install.sh" and/or a script
+  As long as glusterfs/ is the only sub-directory the installation script is
+  simple to execute:
+  - ./install.sh --help  # to learn about the various options,
+  - ./install.sh <brick-device>
+  - examine the log file in /var/log/glusterfs-hadoop-install.log
+
+  If there is more than one sub-directory in the git repo then a tarball must
+  be created prior to executing install.sh. The tarball needs to contain all of
+  the common files and the sub-directories for the target installation. After
+  creating the tarball, extract it to a empty directory and run ./install.sh.
+
+  Each sub-directory may contain a script named "pre_install.sh" and/or a script
   named "post_install.sh". These are the only scripts within a sub-directory
   that are automatically executed by the common install.sh script. As expected,
   "pre_install.sh" is invoked as the first step of the common "prep_node.sh" 
   script, and "post_install.sh" is invoked as the last step of prep_node.sh.
   Note: the common prep_node.sh script is automatically invoked by the common
-  install.sh script once per node.
+  install.sh script, once per node.
 
   Sub-directory *_install.sh scripts may execute additional programs and/or
   scripts, but the common install.sh script only executes one "pre_install" and
@@ -41,21 +45,17 @@
   The tarball is downloaded to one of the cluster nodes or to the user's
   localhost. The download directory is arbitrary. The common install.sh requires
   password-less ssh from the node hosting the install tarball (the "install-
-  from" node) to all nodes in the cluster. There is a utility script,
-  devutils/passwordless-ssh.sh, to set up password-less SSH based on the nodes
-  listed in the "hosts" file. 
+  from" node) to all nodes in the cluster.
  
   The tarball should contain the following:
    - 20_glusterfs_hadoop_sudoers: sudoers file for multi-users.
+   - functions: functions common to multiple scripts.
+   - glusterfs/: directory for fedora-specific files/scritps.
    - hosts.example: sample "hosts" config file.
    - install.sh: the common install script, executed by the root user.
-   - prep_node.sh: companion script to install.sh, executed once per node.
    - post_install_dirs.sh: a script to set up multi-user security.
+   - prep_node.sh: companion script to install.sh, executed once per node.
    - README.txt: this file.
-   - devutils/: utility directory.
-   - fedora/: optional, directory for fedora-specific files/scritps.
-   - rhs/: optional, directory for rhs-specific files/scripts.
-   Note: one of fedora/ or rhs/ (but not both) is required.
 
  
 == Before you begin ==
@@ -82,10 +82,7 @@
 
   Note:
   - passwordless SSH is required between the installation node and each storage
-    node. See the Addendum at the end of this document if you would like to see 
-    instructions on how to do this. Note: there is a utility script named
-    devutils/passwordless-ssh.sh which sets up password-less SSH using the nodes
-    defined in the local hosts file.
+    node.
   - the order of the nodes in the "hosts" file is in replica order.
 
 
@@ -130,11 +127,3 @@ Instructions:
     Submit a TeraSort Hadoop job test
     bin/hadoop jar hadoop-examples-1.2.0.1.3.2.0-112.jar terasort in-dir out-dir
 
-
-== Addendum ==
-
-1) Setting up password-less SSH 
- 
-   There is a utility script (devutils/passwordless-ssh.sh) which will set up
-   password-less SSH from localhost (or wherever you run the script from) to 
-   all hosts defined in the local "hosts" file. Use --help for more info.

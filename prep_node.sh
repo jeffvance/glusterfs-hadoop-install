@@ -182,19 +182,20 @@ function sudoers(){
   (( err != 0 )) && display "WARN: sudoers chmod error $err" $LOG_FORCE
 }
 
-# disable_firewall: use iptables to disable the firewall.
+# disable_firewall: turn off iptables and make the change permanent on reboot.
 #
 function disable_firewall(){
 
   local out; local err
 
-  out="$(iptables -F)" # sure fire way to disable iptables
+  out="$(service iptables stop 2>&1)"
   err=$?
-  display "iptables: $out" $LOG_DEBUG
-  if (( err != 0 )) ; then
-    display "WARN: iptables error $err" $LOG_FORCE
-  fi
+  display "service iptables: $out" $LOG_DEBUG
+  (( err != 0 )) && display "WARN $err: iptables" $LOG_FORCE
 
+  out="$(iptables -S 2>&1)" # expect to see no rules
+  display "iptables rules: $out" $LOG_DEBUG
+  
   out="$(chkconfig iptables off 2>&1)" # keep disabled after reboots
   display "chkconfig off: $out" $LOG_DEBUG
 }

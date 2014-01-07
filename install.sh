@@ -25,7 +25,7 @@
 
 # set global variables
 SCRIPT=$(basename $0)
-INSTALL_VER='0.52'   # self version
+INSTALL_VER='0.53'   # self version
 INSTALL_DIR=$PWD     # name of deployment (install-from) dir
 INSTALL_FROM_IP=$(hostname -i)
 REMOTE_INSTALL_DIR="/tmp/rhs-hadoop-install/" # on each node
@@ -561,7 +561,8 @@ function create_trusted_pool(){
 # 7) create vol **
 # 8) start vol **
 # 9) mount vol
-# 10) create distributed mapred/system dir (done after vol mount)
+# 10) create distributed mapred/system and mr-history/done dirs (must be done
+#     after the vol mount)
 # 11) chmod gluster mnt, mapred/system and brick1/mapred scratch dir
 # 12) chown to mapred:hadoop the above
 # ** gluster cmd only done once for entire pool; all other cmds executed on
@@ -667,12 +668,13 @@ function setup(){
   verify_vol_started
 
   # 9) mount vol on every node
-  # 10) create distributed mapred/system dir on every node
+  # 10) create distributed mapred/system and mr-history/done dirs on each node
   # 11) chmod on the gluster mnt and the mapred scracth dir on every node
   # 12) chown on the gluster mnt and mapred scratch dir on every node
   display "  -- on all nodes:"                      $LOG_INFO
   display "       mount $GLUSTER_MNT..."            $LOG_INFO
   display "       create $MAPRED_SYSTEM_DIR dir..." $LOG_INFO
+  display "       create $MR_HIST_DONE_DIR dir..."  $LOG_INFO
   display "       create $OWNER user and $GROUP group if needed..." $LOG_INFO
   display "       change owner and permissions..."  $LOG_INFO
   # Note: ownership and permissions must be set *afer* the gluster vol is
@@ -694,7 +696,14 @@ function setup(){
         exit 23; }
       display "mkdir $MAPRED_SYSTEM_DIR: $out" $LOG_DEBUG
 
-      # create mapred scratch dir and gluster mnt owner and group
+      out="$(ssh -oStrictHostKeyChecking=no root@$node \
+	"mkdir -p $MR_HIST_DONE_DIR 2>&1")"
+      (( $? != 0 )) && {
+        display "ERROR: $node: mkdir $MR_HIST_DONE_DIR: $out" $LOG_FORCE;
+        exit 24; }
+      display "mkdir $MAPRED_SYSTEM_DIR: $out" $LOG_DEBUG
+
+      # create hadoop group and mapred user
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
         if ! grep -qsi ^$GROUP: /etc/group ; then
           groupadd $GROUP 2>&1 # note: no password, no explicit GID!
@@ -941,9 +950,11 @@ display "$(date). Begin: $SCRIPT -- version $INSTALL_VER ***" $LOG_REPORT
 # define global variables based on --options and defaults
 # convention is to use the volname as the subdir under the brick as the mnt
 BRICK_MNT=$BRICK_DIR/$VOLNAME
-MAPRED_SCRATCH_DIR="$BRICK_DIR/mapredlocal"    # xfs but not distributed
-MAPRED_SYSTEM_DIR="$GLUSTER_MNT/mapred/system" # distributed, not local
-# all sub-directories that are related to the install
+MAPRED_SCRATCH_DIR="$BRICK_DIR/mapredlocal"     # xfs but not distributed
+MAPRED_SYSTEM_DIR="$GLUSTER_MNT/mapred/system"  # distributed, not local
+MR_HIST_DONE_DIR="$GLUSTER_MNT/mr-history/done" # distributed, not local
+
+# capture all sub-directories that are related to the install
 SUBDIRS="$(find ./* -type d -not -path "*/devutils")" # exclude devutils/
 SUBDIRS=${SUBDIRS//$'\n'/ } # replace newline with space
 

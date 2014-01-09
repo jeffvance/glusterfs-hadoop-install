@@ -1,5 +1,3 @@
-#!/bin/bash
-#
 # Copyright (c) 2013 Red Hat, Inc.
 # License: Apache License v2.0
 # Author: Jeff Vance <jvance@redhat.com>
@@ -97,7 +95,7 @@ function install_openjdk(){
 #
 function verify_install_openjdk(){
 
-  rpm -q java-1.7.0-openjdk-devel >& /dev/null || install_xfs
+  rpm -q java-1.7.0-openjdk-devel >& /dev/null || install_openjdk
 }
 
 # install_xfs: 

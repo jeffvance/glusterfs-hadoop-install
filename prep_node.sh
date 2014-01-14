@@ -7,28 +7,29 @@
 # THIS SCRIPT IS NOT MEANT TO BE RUN STAND-ALONE.
 #
 # This script is a companion script to install.sh and runs on a remote node. It
-# prepares the hosting node for hadoop workloads ontop of red hat storage. 
+# prepares the hosting node for hadoop workloads ontop of red hat storage, aka
+# glusterfs. 
 #
-# This script does the following on the host (this) node:
-#  - modifes /etc/hosts to include all hosts ip/hostname for the cluster
-#  - sets up the sudoers file
-#  - ensures that ntp is running correctly
-#  - disables the firewall via iptables
+# This script does the following on each host node:
+#  - modifes /etc/hosts to include all hosts ip/hostname for the cluster,
+#  - sets up the sudoers file,
+#  - ensures that ntp is running correctly,
+#  - disables the firewall,
 #  - install the gluster-hadoop plugin, if present in any of the subdirectories
 #    from which install.sh is run.
 #
 # Lastly, if there are specific shell scripts within any sub-directories found
-# under the deployment dir, they are executed (and passed the same args as
-# prep_node in the same order). Scripts named "pre_install.sh" are invoked
-# before prep_node starts any of its tasks, and scripts named "post_install.sh"
-# are invoked just prior to prep_node exiting. The order of execution for all
-# pre and post install scripts is alphabetic based on sub-directory name.
+# under the deployment dir, they are executed and passed the same args as
+# prep_node. Scripts named "pre_install.sh" are invoked before prep_node starts
+# any of its tasks, and scripts named "post_install.sh" are invoked just prior
+# to prep_node exiting. The order of execution for all pre_ and post_ install
+# scripts is alphabetic based on sub-directory name.
 #
 # Please read the README file.
 #
-# Arguments (all positional):
+# Arguments (positional):
 #   $1=associative array, passed by *declaration*, containing many individual
-#      arg values. Note: special care needed when passing and receiving
+#      arg values. Note: special care is needed when passing and receiving
 #      associative arrays,
 #   $2=HOSTS(array),
 #   $3=HOST IP-addrs(array).
@@ -58,12 +59,11 @@ source ${DEPLOY_DIR}functions
 
 
 # install_plugin: copy the glusterfs-hadoop plugin from a deploy directory to
-# the appropriate Hadoop directory and create a symlink in the hadoop directory.
-# Fatal errors exit script.
+# the appropriate directory and create a symlink in the hadoop directory.
 #
 function install_plugin(){
 
-  local PLUGIN_JAR='glusterfs-hadoop-.*.jar' # note: regexp not glob
+  local PLUGIN_JAR='glusterfs-hadoop-.*.jar' # note: regexp, not glob
   local USR_JAVA_DIR='/usr/share/java'
   local HADOOP_JAVA_DIR='/usr/lib/hadoop/lib/'
   local jar=''; local out; local err
@@ -201,7 +201,8 @@ function disable_firewall(){
 }
 
 # install_common: perform node installation steps independent of whether or not
-# the node is to be the management server or simple a storage/data node.
+# the node is to be the management server or a storage/data node. Note: a node
+# can be both.
 #
 function install_common(){
 

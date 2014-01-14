@@ -7,13 +7,13 @@
 # Please read the README.txt file.
 #
 # This script helps to set up Glusterfs for Hadoop workloads. All tasks common
-# to both fedora and RHS are done here and in the companion prep_node.sh script,
-# which is executed once per node. prep_node.sh will automatically execute pre_
-# install.sh and post_install.sh scripts in all directories listed in the --dirs
-# option, with the default being to execute only scripts in the fedora/
-# directory. Also, all files contained in directories listed in the --dirs
-# option are copied to each host defined in the local "hosts" file, with the
-# same fedora/ default.
+# to both fedora and Red Hat Storage (RHS) are done here and in the companion
+# prep_node.sh script, which is executed once per node. prep_node.sh will
+# automatically execute pre_install.sh and post_install.sh scripts in all
+# directories listed in the --dirs option, with the default being to execute
+# only scripts in the glusterfs/ directory, if present. Also, all files
+# contained in directories listed in the --dirs option are copied to each host
+# defined in the local "hosts" fil
 #
 # Assumptions:
 #  - passwordless SSH is setup between the installation node and each storage

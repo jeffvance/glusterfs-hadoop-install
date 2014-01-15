@@ -892,7 +892,7 @@ function reboot_nodes(){
   display "-- $num $msg will be rebooted..." $LOG_SUMMARY
   for ip in "${REBOOT_NODES[@]}"; do
       display "   * rebooting node: $ip..." $LOG_INFO
-      ssh -oStrictHostKeyChecking=no root@$ip reboot -f &  # asynch
+      ssh -oStrictHostKeyChecking=no root@$ip "reboot -f && exit"
   done
 
   # makes sure all rebooted nodes are back up before returning

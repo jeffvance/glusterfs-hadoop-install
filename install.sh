@@ -331,8 +331,8 @@ function report_deploy_values(){
   display "  Number of nodes:    $NUMNODES"         $LOG_REPORT
   display "  Management node:    $MGMT_NODE"        $LOG_REPORT
   display "  Volume name:        $VOLNAME"          $LOG_REPORT
-  display "  Volume mount:       $GLUSTER_MNT"      $LOG_REPORT
   display "  # of replicas:      $REPLICA_CNT"      $LOG_REPORT
+  display "  Volume mount:       $GLUSTER_MNT"      $LOG_REPORT
   display "  XFS device file:    $BRICK_DEV"        $LOG_REPORT
   display "  XFS brick dir:      $BRICK_DIR"        $LOG_REPORT
   display "  XFS brick mount:    $BRICK_MNT"        $LOG_REPORT
@@ -551,46 +551,47 @@ function create_trusted_pool(){
   display "peer status: $out" $LOG_DEBUG
 }
 
-# setup:
-# 1) mkfs.xfs brick_dev
-# 2) mkdir brick_dir; mkdir vol_mnt
-# 3) append mount entries to fstab
-# 4) mount brick
-# 5) mkdir mapredlocal scratch dir (must be done after brick mount!)
-# 6) create trusted pool
-# 7) create vol **
-# 8) start vol **
-# 9) mount vol
-# 10) create distributed mapred/system and mr-history/done dirs (must be done
-#     after the vol mount)
-# 11) create the mapred and yarn users, and the hadoop group
-# 12) chmod gluster mnt, mapred/system and brick1/mapred scratch dir
-# 13) chown to mapred:hadoop the above
+# setup: create a directory, owner, permissions, mounts environment for Hadoop
+# jobs. Note that the order below is very important, particualarly creating DFS
+# directories and their permissions *after* the mount.
+#  1) mkfs.xfs brick_dev
+#  2) mkdir brick_dir; mkdir vol_mnt
+#  3) append mount entries to fstab
+#  4) mount brick
+#  5) mkdir mapredlocal scratch dir (must be done after brick mount!)
+#  6) create trusted pool
+#  7) create vol **
+#  8) start vol **
+#  9) mount vol
+#  10) create distributed mapred/system and mr-history/done dirs (must be done
+#      after the vol mount)
+#  11) create the mapred and yarn users, and the hadoop group
+#  12) chmod gluster mnt, mapred/system and brick1/mapred scratch dir
+#  13) chown to mapred:hadoop the above
 # ** gluster cmd only done once for entire pool; all other cmds executed on
 #    each node
 # TODO: limit disk space usage in MapReduce scratch dir so that it does not
 #       consume too much of the shared storage space.
-# NOTE: read comments below about the inablility to persist gluster volume
-#       mounts via /etc/fstab when using pre-2.1 RHS.
 #
 function setup(){
 
   local i=0; local node=''; local ip=''; local out
   local dir; local perm; local owner
   local user; local uid
+  local HADOOP_G='hadoop'; local HADOOP_GID=500
   local MAPRED_U='mapred'
   local YARN_U='yarn'; local YARN_UID=502
-  local MR_USERS=("$MAPRED_U" "$YARN_U")
+  local MR_USERS=("$MAPRED_U" "$YARN_U") # paired with MR_UIDS below
   local MR_UIDS=('X' 502)
-  local HADOOP_G='hadoop'; local HADOOP_GID=500
   local YARN_NM_REMOTE_APP_LOG_DIR='tmp/logs'
   local MR_JOB_HIST_INTERMEDIATE_DONE='mr-history/tmp'
   local MR_JOB_HIST_DONE='mr-history/done'
   local YARN_STAGE='job-staging-yarn'
   local MR_JOB_HIST_APPS_LOGS='app-logs'
-  local MR_DIRS=('mapred/system' 'tmp' 'user' 'mr-history' "$YARN_NM_REMOTE_APP_LOG_DIR" "$MR_JOB_HIST_INTERMEDIATE_DONE" "$MR_JOB_HIST_DONE" 'mapred' "$YARN_STAGE" "MR_JOB_HIST_APPS_LOGS")
-  local MR_PERMS=(0755 1777 0775 0755 1777 1777 0750 0770 0770 1777)
-  local MR_OWNERS=("$MAPRED_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U")
+  # the next 3 arrays are all paired
+  local MR_DIRS=('mapred' 'mapred/system' 'tmp' 'user' 'mr-history' "$YARN_NM_REMOTE_APP_LOG_DIR" "$MR_JOB_HIST_INTERMEDIATE_DONE" "$MR_JOB_HIST_DONE" "$YARN_STAGE" "$MR_JOB_HIST_APPS_LOGS")
+  local MR_PERMS=(0770 0755 1777 0775 0755 1777 1777 0750 0770 1777)
+  local MR_OWNERS=("$MAPRED_U" "$MAPRED_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U")
   local BRICK_MNT_OPTS="noatime,inode64"
   local GLUSTER_MNT_OPTS="entry-timeout=0,attribute-timeout=0,use-readdirp=no,acl,_netdev"
 
@@ -716,6 +717,7 @@ function setup(){
       for (( i=0 ; i<${#MR_USERS[@]} ; i++ )) ; do
 	user="${MR_USERS[$i]}"
         uid="${MR_UIDS[$i]}"
+        # ignore uid if set to 'X'
 	[[ "$uid" == 'X' ]] && uid='' || uid="--uid $uid"
 	out="$(ssh -oStrictHostKeyChecking=no root@$node "
 		if ! getent passwd $user >/dev/null ; then
@@ -961,7 +963,7 @@ display "$(date). Begin: $SCRIPT -- version $INSTALL_VER ***" $LOG_REPORT
 # define global variables based on --options and defaults
 # convention is to use the volname as the subdir under the brick as the mnt
 BRICK_MNT=$BRICK_DIR/$VOLNAME
-MAPRED_SCRATCH_DIR="$BRICK_DIR/mapredlocal"     # xfs but not distributed
+MAPRED_SCRATCH_DIR="$BRICK_DIR/mapredlocal" # xfs but not distributed
 
 # capture all sub-directories that are related to the install
 SUBDIRS="$(find ./* -type d -not -path "*/devutils")" # exclude devutils/

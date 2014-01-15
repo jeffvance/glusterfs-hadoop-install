@@ -172,7 +172,7 @@ function verify_local_deploy_setup(){
 
     if [[ -n "$REPLICA_CNT" ]] ; then
       # validate the number of nodes in the hosts file
-      if [[ "$verify_arg" == true && $NUMNODES < $REPLICA_CNT ]] ; then
+      if [[ "$verify_arg" == true ]] && (( NUMNODES < REPLICA_CNT )) ; then
         errmsg+=" * The $HOSTS_FILE file must contain at least $REPLICA_CNT nodes (replica count)\n"
         ((errcnt++))
       elif (( NUMNODES % REPLICA_CNT != 0 )) ; then

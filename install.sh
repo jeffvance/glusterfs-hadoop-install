@@ -576,6 +576,8 @@ function create_trusted_pool(){
 function setup(){
 
   local i=0; local node=''; local ip=''; local out
+  local BRICK_MNT_OPTS="noatime,inode64"
+  local GLUSTER_MNT_OPTS="entry-timeout=0,attribute-timeout=0,use-readdirp=no,acl,_netdev"
   local dir; local perm; local owner
   local user; local uid
   local HADOOP_G='hadoop'; local HADOOP_GID=500
@@ -592,8 +594,6 @@ function setup(){
   local MR_DIRS=('mapred' 'mapred/system' 'tmp' 'user' 'mr-history' "$YARN_NM_REMOTE_APP_LOG_DIR" "$MR_JOB_HIST_INTERMEDIATE_DONE" "$MR_JOB_HIST_DONE" "$YARN_STAGE" "$MR_JOB_HIST_APPS_LOGS")
   local MR_PERMS=(0770 0755 1777 0775 0755 1777 1777 0750 0770 1777)
   local MR_OWNERS=("$MAPRED_U" "$MAPRED_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U")
-  local BRICK_MNT_OPTS="noatime,inode64"
-  local GLUSTER_MNT_OPTS="entry-timeout=0,attribute-timeout=0,use-readdirp=no,acl,_netdev"
 
   # 1) mkfs.xfs brick_dev on every node
   # 2) mkdir brick_dir and vol_mnt on every node

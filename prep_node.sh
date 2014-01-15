@@ -258,7 +258,7 @@ function install_mgmt(){
 
 # execute_scripts: if there are pre_ or post_ scripts in any of the extra sub-
 # dirs then execute them. All prep_node args are passed to the script; however,
-# unfortunately, $@ cannot be used since the arrays are lost.# Therefore, each
+# unfortunately, $@ cannot be used since the arrays are lost. Therefore, each
 # arg is passed individually.
 #
 # $1 is required and is the prefix flag for "pre" or "post" processing of
@@ -266,7 +266,8 @@ function install_mgmt(){
 # automatically executed.
 #
 # Note: script errors are ignored and do not stop the next script from
-#    executing. This may need to be changed later...
+#    executing. However, an exit status of 99 indicates the executed script
+#    has determined that this node needs to be rebooted, so a variable is set.
 # Note: for an unknown reason, the 2 arrays need to be converted to strings
 #   then passed to the script. This is not necessary when passing the same
 #   arrays from install.sh to prep_node.sh but seems to be required here...
@@ -291,7 +292,8 @@ function execute_scripts(){
       ./$(basename $f) "$(declare -p _ARGS)" "$tmp1" "$tmp2"
       err=$?
       cd -
-      (( err != 0 )) && display "$f error: $err" $LOG_INFO
+      (( err == 99 )) && { REBOOT_REQUIRED=true; err=0; }
+      (( err != 0  )) && display "$f error: $err" $LOG_INFO
       display "Done executing: $f" $LOG_INFO
       display '-----------------------' $LOG_INFO
       echo

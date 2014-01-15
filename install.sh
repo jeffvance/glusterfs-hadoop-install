@@ -25,7 +25,7 @@
 
 # set global variables
 SCRIPT=$(basename $0)
-INSTALL_VER='0.54'   # self version
+INSTALL_VER='0.55'   # self version
 INSTALL_DIR=$PWD     # name of deployment (install-from) dir
 INSTALL_FROM_IP=$(hostname -i)
 REMOTE_INSTALL_DIR="/tmp/rhs-hadoop-install/" # on each node
@@ -563,8 +563,9 @@ function create_trusted_pool(){
 # 9) mount vol
 # 10) create distributed mapred/system and mr-history/done dirs (must be done
 #     after the vol mount)
-# 11) chmod gluster mnt, mapred/system and brick1/mapred scratch dir
-# 12) chown to mapred:hadoop the above
+# 11) create the mapred and yarn users, and the hadoop group
+# 12) chmod gluster mnt, mapred/system and brick1/mapred scratch dir
+# 13) chown to mapred:hadoop the above
 # ** gluster cmd only done once for entire pool; all other cmds executed on
 #    each node
 # TODO: limit disk space usage in MapReduce scratch dir so that it does not
@@ -575,8 +576,21 @@ function create_trusted_pool(){
 function setup(){
 
   local i=0; local node=''; local ip=''; local out
-  local PERMISSIONS='775' # for now until we learn how to reduce this...
-  local OWNER='mapred'; local GROUP='hadoop'
+  local dir; local perm; local owner
+  local user; local uid
+  local MAPRED_U='mapred'
+  local YARN_U='yarn'; local YARN_UID=502
+  local MR_USERS=("$MAPRED_U" "$YARN_U")
+  local MR_UIDS=('X' 502)
+  local HADOOP_G='hadoop'; local HADOOP_GID=500
+  local YARN_NM_REMOTE_APP_LOG_DIR='tmp/logs'
+  local MR_JOB_HIST_INTERMEDIATE_DONE='mr-history/tmp'
+  local MR_JOB_HIST_DONE='mr-history/done'
+  local YARN_STAGE='job-staging-yarn'
+  local MR_JOB_HIST_APPS_LOGS='app-logs'
+  local MR_DIRS=('mapred/system' 'tmp' 'user' 'mr-history' "$YARN_NM_REMOTE_APP_LOG_DIR" "$MR_JOB_HIST_INTERMEDIATE_DONE" "$MR_JOB_HIST_DONE" 'mapred' "$YARN_STAGE" "MR_JOB_HIST_APPS_LOGS")
+  local MR_PERMS=(0755 1777 0775 0755 1777 1777 0750 0770 0770 1777)
+  local MR_OWNERS=("$MAPRED_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U")
   local BRICK_MNT_OPTS="noatime,inode64"
   local GLUSTER_MNT_OPTS="entry-timeout=0,attribute-timeout=0,use-readdirp=no,acl,_netdev"
 
@@ -669,13 +683,13 @@ function setup(){
 
   # 9) mount vol on every node
   # 10) create distributed mapred/system and mr-history/done dirs on each node
-  # 11) chmod on the gluster mnt and the mapred scracth dir on every node
-  # 12) chown on the gluster mnt and mapred scratch dir on every node
+  # 11) create the mapred and yarn users, and the hadoop group on each node
+  # 12) chmod on the gluster mnt and the mapred scracth dir on every node
+  # 13) chown on the gluster mnt and mapred scratch dir on every node
   display "  -- on all nodes:"                      $LOG_INFO
   display "       mount $GLUSTER_MNT..."            $LOG_INFO
-  display "       create $MAPRED_SYSTEM_DIR dir..." $LOG_INFO
-  display "       create $MR_HIST_DONE_DIR dir..."  $LOG_INFO
-  display "       create $OWNER user and $GROUP group if needed..." $LOG_INFO
+  display "       create M/R directories..."        $LOG_INFO
+  display "       create users and group as needed..." $LOG_INFO
   display "       change owner and permissions..."  $LOG_INFO
   # Note: ownership and permissions must be set *afer* the gluster vol is
   #       mounted.
@@ -684,54 +698,51 @@ function setup(){
       out="$(ssh -oStrictHostKeyChecking=no root@$node \
 		"mount $GLUSTER_MNT 2>&1")" # from fstab
       (( $? != 0 )) && {
-        display "ERROR: $node: mount $GLUSTER_MNT: $out" $LOG_FORCE;
+	display "ERROR: $node: mount $GLUSTER_MNT: $out" $LOG_FORCE;
 	exit 21; }
       display "mount $GLUSTER_MNT: $out" $LOG_DEBUG
       verify_gluster_mnt $node  # important for chmod/chown below
 
-      out="$(ssh -oStrictHostKeyChecking=no root@$node \
-	"mkdir -p $MAPRED_SYSTEM_DIR 2>&1")"
-      (( $? != 0 )) && {
-        display "ERROR: $node: mkdir $MAPRED_SYSTEM_DIR: $out" $LOG_FORCE;
-        exit 23; }
-      display "mkdir $MAPRED_SYSTEM_DIR: $out" $LOG_DEBUG
-
-      out="$(ssh -oStrictHostKeyChecking=no root@$node \
-	"mkdir -p $MR_HIST_DONE_DIR 2>&1")"
-      (( $? != 0 )) && {
-        display "ERROR: $node: mkdir $MR_HIST_DONE_DIR: $out" $LOG_FORCE;
-        exit 24; }
-      display "mkdir $MAPRED_SYSTEM_DIR: $out" $LOG_DEBUG
-
-      # create hadoop group and mapred user
+      # create hadoop group, if needed
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
-        if ! grep -qsi ^$GROUP: /etc/group ; then
-          groupadd $GROUP 2>&1 # note: no password, no explicit GID!
+        if ! getent group $HADOOP_G >/dev/null ; then
+          groupadd --gid $HADOOP_GID $HADOOP_G 2>&1 # note: no password
         fi")"
       (( $? != 0 )) && {
-        display "ERROR: $node: groupadd $GROUP: $out" $LOG_FORCE; exit 25; }
-      display "groupadd $GROUP: $out" $LOG_DEBUG
+	display "ERROR: $node: groupadd $HADOOP_G: $out" $LOG_FORCE; exit 23; }
+      display "groupadd $HADOOP_G: $out" $LOG_DEBUG
 
-      out="$(ssh -oStrictHostKeyChecking=no root@$node "
-        if ! grep -qsi ^$OWNER: /etc/passwd ; then
-          # add user but with no password and no hard-coded UID
-          useradd --system -g $GROUP $OWNER 2>&1
-        fi")"
-      (( $? != 0 )) && {
-        display "ERROR: $node: useradd $OWNER: $out" $LOG_FORCE; exit 27; }
-      display "useradd $OWNER: $out" $LOG_DEBUG
+      # create the required M/R-YARN users, if needed
+      for (( i=0 ; i<${#MR_USERS[@]} ; i++ )) ; do
+	user="${MR_USERS[$i]}"
+        uid="${MR_UIDS[$i]}"
+	[[ "$uid" == 'X' ]] && uid='' || uid="--uid $uid"
+	out="$(ssh -oStrictHostKeyChecking=no root@$node "
+		if ! getent passwd $user >/dev/null ; then
+ 		  useradd --system $uid -g $HADOOP_G $user 2>&1
+		fi
+	       ")"
+	(( $? != 0 )) && {
+	  display "ERROR: $node: useradd $user: $out" $LOG_FORCE;
+	  exit 25; }
+	display "useradd $user: $out" $LOG_DEBUG
+      done
 
-      out="$(ssh -oStrictHostKeyChecking=no root@$node \
-	"chown -R $OWNER:$GROUP $GLUSTER_MNT $MAPRED_SCRATCH_DIR 2>&1")"
-      (( $? != 0 )) && {
-        display "ERROR: $node: chown $OWNER:$GROUP: $out" $LOG_FORCE; exit 30; }
-      display "chown $OWNER:$GROUP: $out" $LOG_DEBUG
-
-      out="$(ssh -oStrictHostKeyChecking=no root@$node \
-	"chmod -R $PERMISSIONS $GLUSTER_MNT $MAPRED_SCRATCH_DIR 2>&1")"
-      (( $? != 0 )) && {
-        display "ERROR: $node: chmod $GLUSTER_MNT: $out" $LOG_FORCE; exit 33; }
-      display "chmod $GLUSTER_MNT: $out" $LOG_DEBUG
+      # create all of the M/R-YARN dirs with correct perms and owner
+      for (( i=0 ; i<${#MR_DIRS[@]} ; i++ )) ; do
+	dir="$GLUSTER_MNT/${MR_DIRS[$i]}"
+	perm="${MR_PERMS[$i]}"
+	owner="${MR_OWNERS[$i]}"
+	out="$(ssh -oStrictHostKeyChecking=no root@$node "
+		mkdir -p $dir 2>&1     && \
+		chmod $perm $dir 2>&1  && \
+		chown $owner:$HADOOP_G $dir 2>&1
+	       ")"
+	(( $? != 0 )) && {
+	  display "ERROR: $node: mkdir/chmod/chown on $dir: $out" $LOG_FORCE;
+	  exit 27; }
+	display "mkdir/chmod/chown on $dir: $out" $LOG_DEBUG
+      done
   done
 }
 
@@ -951,8 +962,6 @@ display "$(date). Begin: $SCRIPT -- version $INSTALL_VER ***" $LOG_REPORT
 # convention is to use the volname as the subdir under the brick as the mnt
 BRICK_MNT=$BRICK_DIR/$VOLNAME
 MAPRED_SCRATCH_DIR="$BRICK_DIR/mapredlocal"     # xfs but not distributed
-MAPRED_SYSTEM_DIR="$GLUSTER_MNT/mapred/system"  # distributed, not local
-MR_HIST_DONE_DIR="$GLUSTER_MNT/mr-history/done" # distributed, not local
 
 # capture all sub-directories that are related to the install
 SUBDIRS="$(find ./* -type d -not -path "*/devutils")" # exclude devutils/

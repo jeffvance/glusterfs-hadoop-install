@@ -74,10 +74,11 @@ function match_dir(){
   done
 }
 
-# verify_local_deploy_setup: make sure the user is root and that the expected 
-# deploy files are in place. Collect all detected setup errors together (rather # than one at a time) for better usability. Validate format and size of hosts 
-# file. Verify connectivity between localhost and each data/storage node. Assign
-# global HOSTS, HOST_IPS, and MGMT_NODE variables.
+# verify_local_deploy_setup: make sure that the expected deploy files are in
+# place. Collect all detected setup errors together (rather than one at a time)
+# for better usability. Validate format and size of hosts file. Verify
+# connectivity between localhost and each data/storage node. Assign global
+# HOSTS, HOST_IPS, and MGMT_NODE variables.
 #
 # Args:
 #   $1=false means to skip various checks that are needed by install.sh but are
@@ -183,11 +184,6 @@ function verify_local_deploy_setup(){
 
   # main #
   #      #
-  if [[ "$verify_arg" == true && $UID != 0 ]] ; then
-    errmsg+=" * Must be root to run this script.\n"
-    ((errcnt++))
-  fi
-
   if [[ ! -f $HOSTS_FILE ]] ; then
     errmsg+=" * \"$HOSTS_FILE\" file is missing.\n   This file contains a list of IP address followed by hostname, one\n   pair per line. Use \"hosts.example\" as an example.\n"
     ((errcnt++))

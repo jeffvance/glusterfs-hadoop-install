@@ -50,12 +50,13 @@
   The tarball should contain the following:
    - 20_glusterfs_hadoop_sudoers: sudoers file for multi-users.
    - functions: functions common to multiple scripts.
-   - glusterfs/: directory for fedora-specific files/scritps.
+   - either glusterfs/: directory for fedora-specific files/scritps --or--
+     rhs/ (plus optionally other rhs-specific sub-dirs).
    - hosts.example: sample "hosts" config file.
    - install.sh: the common install script, executed by the root user.
-   - post_install_dirs.sh: a script to set up multi-user security.
    - prep_node.sh: companion script to install.sh, executed once per node.
    - README.txt: this file.
+   - setup_container_executor.sh: script to configure a hadoop linux container.
 
  
 == Before you begin ==
@@ -103,15 +104,19 @@ Instructions:
     For example: ./install.sh /dev/sdb
 
     Output is displayed on STDOUT and is also written to a logfile. The default
-    logfile is: /var/log/glusterfs-cluster-install.log. The --logfile option
-    allows for a different logfile. Even when a less verbose setting is used
-    the logfile will contain all messages.
+    logfile is: /var/log/<glusterfs|rhs>-hadoop-install.log. The --logfile
+    option allows for a different logfile. Even when a less verbose setting is
+    used the logfile will contain all messages.
+    Note: each storage node also has a logfile named
+      /tmp/<glusterfs|rhs>-hadoop-install/prep_node.log. This logfile is added 
+      to the main logfile but may be useful if a node crashes or the script
+      hangs.
 
  4) When the script completes remaining Hadoop distro and management steps need
-    to be followed.  After hadoop distro installation completes, create gluster 
-    base directories and fix permissions by running this common script:
-    
-    $ ./post_install_dirs.sh /mnt/glusterfs /lib/hadoop
+    to be followed.  After hadoop distro installation completes, run the
+    provided setup_container_executor.sh script to configure hadoop linux
+    containers:
+      $ ./setup_container_executor.sh  # no arguments
  
  5) Validate the Installation
 

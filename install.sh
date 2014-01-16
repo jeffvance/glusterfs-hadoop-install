@@ -591,9 +591,11 @@ function setup(){
   local YARN_STAGE='job-staging-yarn'
   local MR_JOB_HIST_APPS_LOGS='app-logs'
   # the next 3 arrays are all paired
-  local MR_DIRS=('mapred' 'mapred/system' 'tmp' 'user' 'mr-history' "$YARN_NM_REMOTE_APP_LOG_DIR" "$MR_JOB_HIST_INTERMEDIATE_DONE" "$MR_JOB_HIST_DONE" "$YARN_STAGE" "$MR_JOB_HIST_APPS_LOGS")
-  local MR_PERMS=(0770 0755 1777 0775 0755 1777 1777 0750 0770 1777)
-  local MR_OWNERS=("$MAPRED_U" "$MAPRED_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U")
+  # note: if a dirname is relative (doesn't start with '/') then the gluster
+  #   mount is prepended to it
+  local MR_DIRS=("$GLUSTER_MNT" 'mapred' 'mapred/system' 'tmp' 'user' 'mr-history' "$YARN_NM_REMOTE_APP_LOG_DIR" "$MR_JOB_HIST_INTERMEDIATE_DONE" "$MR_JOB_HIST_DONE" "$YARN_STAGE" "$MR_JOB_HIST_APPS_LOGS")
+  local MR_PERMS=(0775 0770 0755 1777 0775 0755 1777 1777 0750 0770 1777)
+  local MR_OWNERS=("$YARN_U" "$MAPRED_U" "$MAPRED_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U")
 
   # 1) mkfs.xfs brick_dev on every node
   # 2) mkdir brick_dir and vol_mnt on every node
@@ -732,7 +734,9 @@ function setup(){
 
       # create all of the M/R-YARN dirs with correct perms and owner
       for (( i=0 ; i<${#MR_DIRS[@]} ; i++ )) ; do
-	dir="$GLUSTER_MNT/${MR_DIRS[$i]}"
+	dir="${MR_DIRS[$i]}"
+	# prepend gluster mnt unless dir name is an absolute pathname
+	[[ "${dir:0:1}" != '/' ]] && dir="$GLUSTER_MNT/$dir"
 	perm="${MR_PERMS[$i]}"
 	owner="${MR_OWNERS[$i]}"
 	out="$(ssh -oStrictHostKeyChecking=no root@$node "

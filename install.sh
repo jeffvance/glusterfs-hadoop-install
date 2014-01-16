@@ -25,9 +25,10 @@
 
 # set global variables
 SCRIPT=$(basename $0)
-INSTALL_VER='0.56'   # self version
+INSTALL_VER='0.57'   # self version
 INSTALL_DIR=$PWD     # name of deployment (install-from) dir
-INSTALL_FROM_IP=$(hostname -i)
+INSTALL_FROM_IP=($(hostname -I))
+INSTALL_FROM_IP=${INSTALL_FROM_IP[$(( ${#INSTALL_FROM_IP[@]}-1 ))]} # last ntry
 REMOTE_INSTALL_DIR="/tmp/rhs-hadoop-install/" # on each node
 # companion install script name
 PREP_SH='prep_node.sh' # companion script run on each node
@@ -328,6 +329,7 @@ function report_deploy_values(){
   [[ -n "$RHN_USER" ]] && \
     display "  RHN user:           $RHN_USER"       $LOG_REPORT
   display "  \"hosts\" file:       $HOSTS_FILE"     $LOG_REPORT
+  display "  Using DNS:          $USING_DNS"        $LOG_REPORT
   display "  Number of nodes:    $NUMNODES"         $LOG_REPORT
   display "  Management node:    $MGMT_NODE"        $LOG_REPORT
   display "  Volume name:        $VOLNAME"          $LOG_REPORT
@@ -555,14 +557,14 @@ function create_trusted_pool(){
 # jobs. Note that the order below is very important, particualarly creating DFS
 # directories and their permissions *after* the mount.
 #  1) mkfs.xfs brick_dev
-#  2) mkdir brick_dir; mkdir vol_mnt
+#  2) mkdir brick_dir
 #  3) append mount entries to fstab
 #  4) mount brick
 #  5) mkdir mapredlocal scratch dir (must be done after brick mount!)
 #  6) create trusted pool
 #  7) create vol **
 #  8) start vol **
-#  9) mount vol
+#  9) mkdir vol mnt and mount vol
 #  10) create distributed mapred/system and mr-history/done dirs (must be done
 #      after the vol mount)
 #  11) create the mapred and yarn users, and the hadoop group
@@ -602,14 +604,14 @@ function setup(){
   # 5) mkdir mapredlocal scratch dir on every node (done after brick mount)
   display "  -- on all nodes:"                           $LOG_INFO
   display "       mkfs.xfs $BRICK_DEV..."                $LOG_INFO
-  display "       mkdir $BRICK_DIR, $GLUSTER_MNT and $MAPRED_SCRATCH_DIR..." \
-	$LOG_INFO
+  display "       mkdir $BRICK_DIR and $MAPRED_SCRATCH_DIR..." $LOG_INFO
   display "       append mount entries to /etc/fstab..." $LOG_INFO
   display "       mount $BRICK_DIR..."                   $LOG_INFO
   out=''
   for (( i=0; i<$NUMNODES; i++ )); do
       node="${HOSTS[$i]}"
       ip="${HOST_IPS[$i]}"
+
       out="$(ssh -oStrictHostKeyChecking=no root@$node \
 	"mkfs -t xfs -i size=512 -f $BRICK_DEV 2>&1")"
       (( $? != 0 )) && {
@@ -623,12 +625,6 @@ function setup(){
         display "ERROR: $node: mkdir $BRICK_MNT: $out" $LOG_FORCE; exit 11; }
       display "mkdir $BRICK_MNT: $out" $LOG_DEBUG
 
-      out="$(ssh -oStrictHostKeyChecking=no root@$node \
-	"mkdir -p $GLUSTER_MNT 2>&1")"
-      (( $? != 0 )) && {
-        display "ERROR: $node: mkdir $GLUSTER_MNT: $out" $LOG_FORCE; exit 13; }
-      display "mkdir $GLUSTER_MNT: $out" $LOG_DEBUG
-
       # append brick and gluster mounts to fstab
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
         if ! grep -qs $BRICK_DIR /etc/fstab ; then
@@ -639,7 +635,7 @@ function setup(){
                 >>/etc/fstab
         fi")"
       (( $? != 0 )) && {
-        display "ERROR: $node: append fstab: $out" $LOG_FORCE; exit 15; }
+        display "ERROR: $node: append fstab: $out" $LOG_FORCE; exit 13; }
       display "append fstab: $out" $LOG_DEBUG
 
       # Note: mapred scratch dir must be created *after* the brick is
@@ -649,14 +645,14 @@ function setup(){
       out="$(ssh -oStrictHostKeyChecking=no root@$node \
 	"mount $BRICK_DIR 2>&1")" # mount via fstab
       (( $? != 0 )) && {
-        display "ERROR: $node: mount $BRICK_DIR: $out" $LOG_FORCE; exit 17; }
+        display "ERROR: $node: mount $BRICK_DIR: $out" $LOG_FORCE; exit 15; }
       display "append fstab: $out" $LOG_DEBUG
 
       out="$(ssh -oStrictHostKeyChecking=no root@$node \
 	"mkdir -p $MAPRED_SCRATCH_DIR 2>&1")"
       (( $? != 0 )) && {
         display "ERROR: $node: mkdir $MAPRED_SCRATCH_DIR: $out" $LOG_FORCE;
-        exit 19; }
+        exit 17; }
       display "mkdir $MAPRED_SCRATCH_DIR: $out" $LOG_DEBUG
   done
 
@@ -682,7 +678,7 @@ function setup(){
   display "vol start: $out" $LOG_DEBUG
   verify_vol_started
 
-  # 9) mount vol on every node
+  # 9) mkdir vol mnt and mount vol on every node
   # 10) create distributed mapred/system and mr-history/done dirs on each node
   # 11) create the mapred and yarn users, and the hadoop group on each node
   # 12) chmod on the gluster mnt and the mapred scracth dir on every node
@@ -696,6 +692,15 @@ function setup(){
   #       mounted.
   for node in "${HOSTS[@]}"; do
       display "-- $node --" $LOG_INFO
+
+      # create vol mnt dir
+      out="$(ssh -oStrictHostKeyChecking=no root@$node \
+	"mkdir -p $GLUSTER_MNT 2>&1")"
+      (( $? != 0 )) && {
+        display "ERROR: $node: mkdir $GLUSTER_MNT: $out" $LOG_FORCE; exit 19; }
+      display "mkdir $GLUSTER_MNT: $out" $LOG_DEBUG
+
+      # mount vol via fstab
       out="$(ssh -oStrictHostKeyChecking=no root@$node \
 		"mount $GLUSTER_MNT 2>&1")" # from fstab
       (( $? != 0 )) && {
@@ -781,16 +786,20 @@ function install_nodes(){
   #
   function prep_node(){
 
+## DO I STILL WANT TO PASS ip?? Can't be null or ""
     local node="$1"; local ip="$2"; local install_storage="$3"
-    local install_mgmt="$4"; local err
+    local install_mgmt="$4"
+    local err; local ssh_target
     local FILES_TO_CP="$PREP_SH functions *sudoers* $SUBDIRS"
 
-    # use ip rather than node for scp and ssh until /etc/hosts is set up
-    ssh -oStrictHostKeyChecking=no root@$ip "
+    # if possible, use ip rather than node for scp and ssh until /etc/hosts
+    # is set up
+    [[ $USING_DNS == true ]] && ssh_target=$node || ssh_target=$ip
+    ssh -oStrictHostKeyChecking=no root@$ssh_target "
 	rm -rf $REMOTE_INSTALL_DIR
 	mkdir -p $REMOTE_INSTALL_DIR"
     display "-- Copying rhs-hadoop install files..." $LOG_INFO
-    out="$(scp -r $FILES_TO_CP root@$ip:$REMOTE_INSTALL_DIR)"
+    out="$(scp -r $FILES_TO_CP root@$ssh_target:$REMOTE_INSTALL_DIR)"
     err=$?
     display "copy install files: $out" $LOG_DEBUG
     if (( err != 0 )) ; then
@@ -810,7 +819,7 @@ function install_nodes(){
 	[MGMT_NODE]="$MGMT_NODE" [VERBOSE]="$VERBOSE" \
 	[PREP_LOG]="$PREP_NODE_LOG_PATH" [REMOTE_DIR]="$REMOTE_INSTALL_DIR" \
 	[RHN_USER]="$RHN_USER" [RHN_PASS]="$RHN_PASS")
-    out="$(ssh -oStrictHostKeyChecking=no root@$ip $REMOTE_PREP_SH \
+    out="$(ssh -oStrictHostKeyChecking=no root@$ssh_target $REMOTE_PREP_SH \
         "\"$(declare -p PREP_ARGS)\"" "\"${HOSTS[@]}\"" \ "\"${HOST_IPS[@]}\""
 	)"
     err=$?
@@ -819,7 +828,7 @@ function install_nodes(){
     # messages that honor the verbose setting. We can't call display() next
     # because we don't want to double log, so instead, append the entire
     # PREP_NODE_LOG file to LOGFILE and echo the contents of $out.
-    scp -q root@$ip:$PREP_NODE_LOG_PATH $LOCAL_PREP_LOG_DIR
+    scp -q root@$ssh_target:$PREP_NODE_LOG_PATH $LOCAL_PREP_LOG_DIR
     cat ${LOCAL_PREP_LOG_DIR}$PREP_NODE_LOG >> $LOGFILE
     echo "$out" # prep_node.sh has honored the verbose setting
 
@@ -840,11 +849,15 @@ function install_nodes(){
   # main #
   #      #
   for (( i=0; i<$NUMNODES; i++ )); do
-      node=${HOSTS[$i]}; ip=${HOST_IPS[$i]}
+      node=${HOSTS[$i]}
+      [[ $USING_DSN == false ]] && ip=${HOST_IPS[$i]} || {
+	ip=($(getent hosts $node));
+	ip=${ip[0]}; # extract the ip-addr, ignore hostname
+      }
       echo
       display
       display '--------------------------------------------' $LOG_SUMMARY
-      display "-- Installing on $node ($ip)"                 $LOG_SUMMARY
+      display "-- Installing on $node"                       $LOG_SUMMARY
       display '--------------------------------------------' $LOG_SUMMARY
       display
 
@@ -973,6 +986,8 @@ echo
 display "-- Verifying the deploy environment, including the \"hosts\" file format:" $LOG_INFO
 verify_local_deploy_setup
 firstNode=${HOSTS[0]}
+# if the HOST_IPS array is empty then we're using dns
+(( ${#HOST_IPS[@] == 0 )) && USING_DNS=true || USING_DNS=false
 
 report_deploy_values
 

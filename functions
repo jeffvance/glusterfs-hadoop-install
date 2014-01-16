@@ -90,23 +90,33 @@ function verify_local_deploy_setup(){
   local verify_arg=${1:-true} # default is full checking
 
   # read_verify_local_hosts_file: sub-function to read the deploy "hosts"
-  # file, split it into the HOSTS and HOST_IPS global array variables, validate
-  # hostnames and ips, and verify password-less ssh connectivity to each node.
+  # file, split it into the HOSTS and, optionally, HOST_IPS global array
+  # variables, validate hostnames and ips (if present), and verify password-
+  # less ssh connectivity to each node. If the ip address field is missing it
+  # must be absent for every record in the file, and conversely, if the ip is
+  # present it must appear at the beginning of every record. NOTE: lack of the
+  # ip address field implies that DNS is being used.
   # Comments and empty lines are ignored in the hosts file. The number of nodes
   # represented in the hosts file is enforced to be a multiple of the replica
   # count. Downcase host names if they are upper case.
   # Expects the following global variables to already be set:
   #   HOSTS_FILE  -- name of local hosts file. Can be set by --hosts option
   #                  otherwise expected to be $PWD/hosts.
+  #   MGMT_NODE   -- name of management node, if supplied
   #
   # Sets the folowing global variables:
   #   HOSTS()
-  #   HOST_IPS()
+  #   HOST_IPS() -- is empty if dns is being used
   #   NUMNODES
+  #   MGMT_NODE
+  #   MGMT_NODE_IN_POOL
   # 
   function read_verify_local_hosts_file(){
 
-    local i; local host=''; local ip=''; local hosts_ary; local numTokens
+    local i; local host=; local ip=; local ssh_target
+    local hosts_ary; local numTokens
+    local numLines; local expectIP; local lineNum
+    local tmphosts="$(mktemp)"
 
     # regular expression to validate ip addresses
     local VALID_IP_RE='^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$'
@@ -114,52 +124,75 @@ function verify_local_deploy_setup(){
     # regular expression to validate hostnames (host is down-cased)
     local VALID_HOSTNAME_RE='^(([a-z0-9]|[a-z0-9][a-z0-9\-]*[a-z0-9])\.)*([a-z0-9]|[a-z0-9][a-z0-9\-]*[a-z0-9])$'
 
-    # read hosts file, skip comments and blank lines, parse out hostname and ip
-    read -a hosts_ary <<< $(sed '/^ *#/d;/^ *$/d;s/#.*//' $HOSTS_FILE)
-    numTokens=${#hosts_ary[@]}
+    # create tmp file containing all non-blank, non-comment records in the
+    # local hosts file
+    sed '/^ *#/d;/^ *$/d;s/#.*//' $HOSTS_FILE >$tmphosts
+    numLines=$(wc -l <$tmphosts)
+
+    # read the tmp hosts file into an array
+    read -a hosts_ary <<< $(cat $tmphosts)
     HOSTS=(); HOST_IPS=() # global vars
+    numTokens=${#hosts_ary[@]}
+
+    # do we expect to have the ip column or not?
+    (( numLines == numTokens )) || expectIP=true
+echo "**** numLines=$numLines, expectIP=$expectIP, numTok=$numTokens"
+echo "**** hosts_ary=${hosts_ary[@]}"
 
     # hosts file format: ip-address  hostname  # one pair per line
     for (( i=0; i<$numTokens; i++ )); do
-	# IP address:
-	ip=${hosts_ary[$i]}
-	# validate basic ip-addr syntax
-	if [[ "$verify_arg" == true && ! $ip =~ $VALID_IP_RE ]] ; then
-	  errmsg+=" * $HOSTS_FILE record $((i/2)):\n   Unexpected IP address syntax for \"$ip\"\n"
-	  ((errcnt++))
-	  break # exit loop
+	ssh_target=''
+	# set 1-based line(record) number
+	[[ -n "$expectIP" ]] && lineNum=$(((i/2)+1)) || lineNum=$((i+1))
+echo "**** lineNum=$lineNum", i=$i
+
+	# see if this field is an ip address
+	if [[ -n "$expectIP" ]] ; then
+	  ip=${hosts_ary[$i]}
+echo "***** ip=$ip"
+	  if [[ $ip =~ $VALID_IP_RE ]] ; then
+	    HOST_IPS+=($ip)
+	    ssh_target=$ip
+            ((i++))
+	  elif [[ "$verify_arg" == true ]] ; then
+	    errmsg+=" * $HOSTS_FILE record $lineNum:\n   Unexpected IP address syntax for \"$ip\"\n"
+	    ((errcnt++))
+	    break # exit loop
+	  fi
 	fi
-	HOST_IPS+=($ip)
 
 	# hostname:
-	((i++))
 	host=${hosts_ary[$i]}
+echo "***** host=$host"
         # down-case if any upper-case letters in host
 	if [[ "$host" =~ [A-Z]+ ]] ; then
 	  display "   ...down-casing $host" $LOG_DEBUG
 	  host=${host,,} # down-case
 	fi
+	# validate basic hostname syntax
+ 	if [[ "$verify_arg" == true && ! $host =~ $VALID_HOSTNAME_RE ]] ; then
+	  errmsg+=" * $HOSTS_FILE record $lineNum:\n   Unexpected hostname syntax for \"$host\"\n"
+	  ((errcnt++))
+	  break # exit loop
+        fi
+	# set ssh target node based on host or ip
+	[[ -z "$ssh_target" ]] && ssh_target="$host"
         # set MGMT_NODE to first node unless --mgmt-node specified
-	if [[ -z "$MGMT_NODE" && $i == 1 ]] ; then # 1st hosts file record
+	if [[ -z "$MGMT_NODE" && $lineNum == 1 ]] ; then
 	  MGMT_NODE="$host"
           MGMT_NODE_IN_POOL=true
 	elif [[ -n "$MGMT_NODE" && "$MGMT_NODE" == "$host" ]] ; then
           MGMT_NODE_IN_POOL=true
-        fi
-	# validate basic hostname syntax
- 	if [[ "$verify_arg" == true && ! $host =~ $VALID_HOSTNAME_RE ]] ; then
-	  errmsg+=" * $HOSTS_FILE record $((i/2)):\n   Unexpected hostname syntax for \"$host\"\n"
-	  ((errcnt++))
-	  break # exit loop
         fi
 	HOSTS+=($host)
 
 	if [[ "$verify_arg" == true ]] ; then
           # verify connectivity from localhost to data node. Note: ip used since
 	  # /etc/hosts may not be set up to map ip to hostname
-	  ssh -q -oBatchMode=yes -oStrictHostKeyChecking=no root@$ip exit
+	  ssh -q -oBatchMode=yes -oStrictHostKeyChecking=no \
+		root@$ssh_target exit
           if (( $? != 0 )) ; then
-	    errmsg+=" * $HOSTS_FILE record $((i/2)):\n   Cannot connect via password-less ssh to \"$host\"\n"
+	    errmsg+=" * $HOSTS_FILE record $lineNum:\n   Cannot connect via password-less ssh to \"$host\"\n"
 	    ((errcnt++))
 	    break # exit loop
 	  fi
@@ -199,5 +232,7 @@ function verify_local_deploy_setup(){
     exit 1
   fi
   display "   ...verified" $LOG_DEBUG
+echo "********* HOSTS=${HOSTS[@]}"
+echo "********* IPs=${HOST_IPS[@]}"
 }
 

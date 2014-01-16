@@ -142,7 +142,7 @@ echo "**** hosts_ary=${hosts_ary[@]}"
     # hosts file format: ip-address  hostname  # one pair per line
     for (( i=0; i<$numTokens; i++ )); do
 	ssh_target=''
-	# set 1-based line(record) number
+	# set 1-based line/record number
 	[[ -n "$expectIP" ]] && lineNum=$(((i/2)+1)) || lineNum=$((i+1))
 echo "**** lineNum=$lineNum", i=$i
 

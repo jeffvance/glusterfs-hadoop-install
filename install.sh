@@ -786,9 +786,8 @@ function install_nodes(){
   #
   function prep_node(){
 
-## DO I STILL WANT TO PASS ip?? Can't be null or ""
-    local node="$1"; local ip="$2"; local install_storage="$3"
-    local install_mgmt="$4"
+    local node="$1"; local ip="$2"
+    local install_storage="$3"; local install_mgmt="$4"
     local err; local ssh_target
     local FILES_TO_CP="$PREP_SH functions *sudoers* $SUBDIRS"
 
@@ -850,14 +849,16 @@ function install_nodes(){
   #      #
   for (( i=0; i<$NUMNODES; i++ )); do
       node=${HOSTS[$i]}
-      [[ $USING_DSN == false ]] && ip=${HOST_IPS[$i]} || {
-	ip=($(getent hosts $node));
-	ip=${ip[0]}; # extract the ip-addr, ignore hostname
-      }
+      if [[ $USING_DSN == true ]] ; then # need to get ip for node
+	ip=($(getent hosts $node))
+	ip=${ip[0]} # extract the ip-addr, ignore hostname
+      else # use ip we already have
+	ip=${HOST_IPS[$i]}
+      fi
       echo
       display
       display '--------------------------------------------' $LOG_SUMMARY
-      display "-- Installing on $node"                       $LOG_SUMMARY
+      display "-- Installing on $node ($ip)"                 $LOG_SUMMARY
       display '--------------------------------------------' $LOG_SUMMARY
       display
 

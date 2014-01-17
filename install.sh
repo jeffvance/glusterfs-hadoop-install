@@ -812,7 +812,7 @@ function install_nodes(){
 	[INST_STORAGE]="$install_storage" [INST_MGMT]="$install_mgmt" \
 	[MGMT_NODE]="$MGMT_NODE" [VERBOSE]="$VERBOSE" \
 	[PREP_LOG]="$PREP_NODE_LOG_PATH" [REMOTE_DIR]="$REMOTE_INSTALL_DIR" \
-	[RHN_USER]="$RHN_USER" [RHN_PASS]="$RHN_PASS")
+	[RHN_USER]="$RHN_USER" [RHN_PASS]="$RHN_PASS" [USING_DNS]=$USING_DNS)
     out="$(ssh -oStrictHostKeyChecking=no root@$ssh_target $REMOTE_PREP_SH \
         "\"$(declare -p PREP_ARGS)\"" "\"${HOSTS[@]}\"" \ "\"${HOST_IPS[@]}\""
 	)"

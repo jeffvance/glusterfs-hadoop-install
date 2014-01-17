@@ -577,7 +577,7 @@ function create_trusted_pool(){
 #
 function setup(){
 
-  local i=0; local node=''; local ip=''; local out
+  local i=0; local node=''; local ip; local out
   local BRICK_MNT_OPTS="noatime,inode64"
   local GLUSTER_MNT_OPTS="entry-timeout=0,attribute-timeout=0,use-readdirp=no,acl,_netdev"
   local dir; local perm; local owner
@@ -608,10 +608,7 @@ function setup(){
   display "       append mount entries to /etc/fstab..." $LOG_INFO
   display "       mount $BRICK_DIR..."                   $LOG_INFO
   out=''
-  for (( i=0; i<$NUMNODES; i++ )); do
-      node="${HOSTS[$i]}"
-      ip="${HOST_IPS[$i]}"
-
+  for node in "${HOSTS[@]}"; do
       out="$(ssh -oStrictHostKeyChecking=no root@$node \
 	"mkfs -t xfs -i size=512 -f $BRICK_DEV 2>&1")"
       (( $? != 0 )) && {
@@ -631,8 +628,8 @@ function setup(){
           echo '$BRICK_DEV $BRICK_DIR xfs  $BRICK_MNT_OPTS  0 0' >>/etc/fstab
         fi
         if ! grep -qs $GLUSTER_MNT /etc/fstab ; then
-          echo '$ip:/$VOLNAME  $GLUSTER_MNT  glusterfs  $GLUSTER_MNT_OPTS  0 0'\
-                >>/etc/fstab
+          echo '$node:/$VOLNAME  $GLUSTER_MNT  glusterfs  $GLUSTER_MNT_OPTS \
+		0 0' >>/etc/fstab
         fi")"
       (( $? != 0 )) && {
         display "ERROR: $node: append fstab: $out" $LOG_FORCE; exit 13; }
@@ -771,8 +768,9 @@ function setup(){
 #
 function install_nodes(){
 
-  local i; local node=''; local ip=''; local install_mgmt_node
+  local i; local node; local ip; local install_mgmt_node
   local LOCAL_PREP_LOG_DIR='/var/tmp/'; local out
+  local FILES_TO_CP="$PREP_SH functions *sudoers* $SUBDIRS"
   REBOOT_NODES=() # global
 
   # prep_node: sub-function which copies the prep_node script and all sub-
@@ -789,11 +787,8 @@ function install_nodes(){
     local node="$1"; local ip="$2"
     local install_storage="$3"; local install_mgmt="$4"
     local err; local ssh_target
-    local FILES_TO_CP="$PREP_SH functions *sudoers* $SUBDIRS"
-
-    # if possible, use ip rather than node for scp and ssh until /etc/hosts
-    # is set up
     [[ $USING_DNS == true ]] && ssh_target=$node || ssh_target=$ip
+
     ssh -oStrictHostKeyChecking=no root@$ssh_target "
 	rm -rf $REMOTE_INSTALL_DIR
 	mkdir -p $REMOTE_INSTALL_DIR"
@@ -834,9 +829,9 @@ function install_nodes(){
     if (( err == 99 )) ; then # this node needs to be rebooted
       # don't reboot if node is the install-from node!
       if [[ "$ip" == "$INSTALL_FROM_IP" ]] ; then
-        DEFERRED_REBOOT_NODE="$node"
+        DEFERRED_REBOOT_NODE="$ssh_target"
       else
-	REBOOT_NODES+=("$ip")
+	REBOOT_NODES+=("$ssh_target")
       fi
     elif (( err != 0 )) ; then # fatal error in install.sh so quit now
       display " *** ERROR! prep_node script exited with error: $err ***" \
@@ -850,8 +845,8 @@ function install_nodes(){
   for (( i=0; i<$NUMNODES; i++ )); do
       node=${HOSTS[$i]}
       if [[ $USING_DSN == true ]] ; then # need to get ip for node
-	ip=($(getent hosts $node))
-	ip=${ip[0]} # extract the ip-addr, ignore hostname
+	ip=($(getent hosts $node)) # -> (ip-addr hostname)
+	ip=${ip[0]} # extract the ip-addr
       else # use ip we already have
 	ip=${HOST_IPS[$i]}
       fi
@@ -863,7 +858,7 @@ function install_nodes(){
       display
 
       # Append to bricks string. Convention to use a subdir under the XFS
-      # brick, and to name this subdir same as volname.
+      # brick, and to name this subdir the same as the volname.
       bricks+=" $node:$BRICK_MNT"
 
       install_mgmt_node=false
@@ -895,7 +890,7 @@ function install_nodes(){
 #
 function reboot_nodes(){
 
-  local ip; local i; local msg
+  local node; local i; local msg
   local num=${#REBOOT_NODES[@]} # number of nodes to reboot
 
   (( num <= 0 )) && return # no nodes to reboot
@@ -904,19 +899,19 @@ function reboot_nodes(){
   msg='node'
   (( num != 1 )) && msg+='s'
   display "-- $num $msg will be rebooted..." $LOG_SUMMARY
-  for ip in "${REBOOT_NODES[@]}"; do
-      display "   * rebooting node: $ip..." $LOG_INFO
-      ssh -oStrictHostKeyChecking=no root@$ip "reboot -f && exit"
+  for node in "${REBOOT_NODES[@]}"; do
+      display "   * rebooting node: $node..." $LOG_INFO
+      ssh -oStrictHostKeyChecking=no root@$node "reboot -f && exit"
   done
 
   # makes sure all rebooted nodes are back up before returning
   while true ; do
       for i in "${!REBOOT_NODES[@]}"; do # array of non-null element indices
-	  ip=${REBOOT_NODES[$i]}         # unset leaves sparse array
-	  # if possible to ssh to ip then unset that array entry
-	  ssh -q -oBatchMode=yes -oStrictHostKeyChecking=no root@$ip exit
+	  node=${REBOOT_NODES[$i]}       # unset leaves sparse array
+	  # if possible to ssh to node then unset that array entry
+	  ssh -q -oBatchMode=yes -oStrictHostKeyChecking=no root@$node exit
 	  if (( $? == 0 )) ; then
-	    display "   * node $ip sucessfully rebooted" $LOG_DEBUG
+	    display "   * node $node sucessfully rebooted" $LOG_DEBUG
 	    unset REBOOT_NODES[$i] # null entry in array
 	  fi
       done
@@ -986,9 +981,9 @@ SUBDIRS=${SUBDIRS//$'\n'/ } # replace newline with space
 echo
 display "-- Verifying the deploy environment, including the \"hosts\" file format:" $LOG_INFO
 verify_local_deploy_setup
-firstNode=${HOSTS[0]}
 # if the HOST_IPS array is empty then we're using dns
 (( ${#HOST_IPS[@] == 0 )) && USING_DNS=true || USING_DNS=false
+firstNode=${HOSTS[0]}
 
 report_deploy_values
 
@@ -1017,7 +1012,7 @@ echo
 display "-- Performance config --" $LOG_SUMMARY
 perf_config
 
-# reboot nodes where a kernel patch was installed
+# reboot nodes if needed
 reboot_nodes
 
 echo

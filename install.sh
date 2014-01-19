@@ -852,12 +852,6 @@ function install_nodes(){
   #      #
   for (( i=0; i<$NUMNODES; i++ )); do
       node=${HOSTS[$i]}; ip=${HOST_IPS[$i]}
-      if [[ $USING_DSN == true ]] ; then # need to get ip for node
-	ip=($(getent hosts $node)) # -> (ip-addr hostname)
-	ip=${ip[0]} # extract the ip-addr
-      else # use ip we already have
-	ip=${HOST_IPS[$i]}
-      fi
       echo
       display
       display '--------------------------------------------' $LOG_SUMMARY

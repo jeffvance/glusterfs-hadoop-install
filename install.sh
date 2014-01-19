@@ -557,14 +557,14 @@ function create_trusted_pool(){
 # jobs. Note that the order below is very important, particualarly creating DFS
 # directories and their permissions *after* the mount.
 #  1) mkfs.xfs brick_dev
-#  2) mkdir brick_dir
+#  2) mkdir brick_dir; mkdir vol_mnt
 #  3) append mount entries to fstab
 #  4) mount brick
 #  5) mkdir mapredlocal scratch dir (must be done after brick mount!)
 #  6) create trusted pool
 #  7) create vol **
 #  8) start vol **
-#  9) mkdir vol mnt and mount vol
+#  9) mount vol
 #  10) create distributed mapred/system and mr-history/done dirs (must be done
 #      after the vol mount)
 #  11) create the mapred and yarn users, and the hadoop group
@@ -593,9 +593,11 @@ function setup(){
   local YARN_STAGE='job-staging-yarn'
   local MR_JOB_HIST_APPS_LOGS='app-logs'
   # the next 3 arrays are all paired
-  local MR_DIRS=('mapred' 'mapred/system' 'tmp' 'user' 'mr-history' "$YARN_NM_REMOTE_APP_LOG_DIR" "$MR_JOB_HIST_INTERMEDIATE_DONE" "$MR_JOB_HIST_DONE" "$YARN_STAGE" "$MR_JOB_HIST_APPS_LOGS")
-  local MR_PERMS=(0770 0755 1777 0775 0755 1777 1777 0750 0770 1777)
-  local MR_OWNERS=("$MAPRED_U" "$MAPRED_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U")
+  # note: if a dirname is relative (doesn't start with '/') then the gluster
+  #  mount is prepended to it
+  local MR_DIRS=("$GLUSTER_MNT" 'mapred' 'mapred/system' 'tmp' 'user' 'mr-history' "$YARN_NM_REMOTE_APP_LOG_DIR" "$MR_JOB_HIST_INTERMEDIATE_DONE" "$MR_JOB_HIST_DONE" "$YARN_STAGE" "$MR_JOB_HIST_APPS_LOGS")
+  local MR_PERMS=(0775 0770 0755 1777 0775 0755 1777 1777 0750 0770 1777)
+  local MR_OWNERS=("YARN_U" "$MAPRED_U" "$MAPRED_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U")
 
   # 1) mkfs.xfs brick_dev on every node
   # 2) mkdir brick_dir and vol_mnt on every node
@@ -604,23 +606,34 @@ function setup(){
   # 5) mkdir mapredlocal scratch dir on every node (done after brick mount)
   display "  -- on all nodes:"                           $LOG_INFO
   display "       mkfs.xfs $BRICK_DEV..."                $LOG_INFO
-  display "       mkdir $BRICK_DIR and $MAPRED_SCRATCH_DIR..." $LOG_INFO
+  display "       mkdir $BRICK_DIR, $GLUSTER_MNT and $MAPRED_SCRATCH_DIR..." $LOG_INFO
   display "       append mount entries to /etc/fstab..." $LOG_INFO
   display "       mount $BRICK_DIR..."                   $LOG_INFO
   out=''
-  for node in "${HOSTS[@]}"; do
+  for (( i=0; i<$NUMNODES; i++ )); do
+      node="${HOSTS[$i]}"
+      ip="${HOST_IPS[$i]}"
+
+      # mkfs.xfs
       out="$(ssh -oStrictHostKeyChecking=no root@$node \
 	"mkfs -t xfs -i size=512 -f $BRICK_DEV 2>&1")"
       (( $? != 0 )) && {
         display "ERROR: $node: mkfs.xfs: $out" $LOG_FORCE; exit 9; }
       display "mkfs.xfs: $out" $LOG_DEBUG
 
-      # volname dir under brick by convention
+      # use volname dir under brick by convention
       out="$(ssh -oStrictHostKeyChecking=no root@$node \
 	"mkdir -p $BRICK_MNT 2>&1")"
       (( $? != 0 )) && {
         display "ERROR: $node: mkdir $BRICK_MNT: $out" $LOG_FORCE; exit 11; }
       display "mkdir $BRICK_MNT: $out" $LOG_DEBUG
+
+      # make vol mnt dir
+      out="$(ssh -oStrictHostKeyChecking=no root@$node \
+        "mkdir -p $GLUSTER_MNT 2>&1")"
+      (( $? != 0 )) && {
+        display "ERROR: $node: mkdir $GLUSTER_MNT: $out" $LOG_FORCE; exit 12; }
+      display "mkdir $GLUSTER_MNT: $out" $LOG_DEBUG
 
       # append brick and gluster mounts to fstab
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
@@ -675,7 +688,7 @@ function setup(){
   display "vol start: $out" $LOG_DEBUG
   verify_vol_started
 
-  # 9) mkdir vol mnt and mount vol on every node
+  # 9) mount vol on every node
   # 10) create distributed mapred/system and mr-history/done dirs on each node
   # 11) create the mapred and yarn users, and the hadoop group on each node
   # 12) chmod on the gluster mnt and the mapred scracth dir on every node
@@ -689,13 +702,6 @@ function setup(){
   #       mounted.
   for node in "${HOSTS[@]}"; do
       display "-- $node --" $LOG_INFO
-
-      # create vol mnt dir
-      out="$(ssh -oStrictHostKeyChecking=no root@$node \
-	"mkdir -p $GLUSTER_MNT 2>&1")"
-      (( $? != 0 )) && {
-        display "ERROR: $node: mkdir $GLUSTER_MNT: $out" $LOG_FORCE; exit 19; }
-      display "mkdir $GLUSTER_MNT: $out" $LOG_DEBUG
 
       # mount vol via fstab
       out="$(ssh -oStrictHostKeyChecking=no root@$node \
@@ -734,7 +740,9 @@ function setup(){
 
       # create all of the M/R-YARN dirs with correct perms and owner
       for (( i=0 ; i<${#MR_DIRS[@]} ; i++ )) ; do
-	dir="$GLUSTER_MNT/${MR_DIRS[$i]}"
+	dir="${MR_DIRS[$i]}"
+	# prepend gluster mnt unless dir name is an absolute pathname
+	[[ "${dir:0:1}" != '/' ]] && dir="$GLUSTER_MNT/$dir"
 	perm="${MR_PERMS[$i]}"
 	owner="${MR_OWNERS[$i]}"
 	out="$(ssh -oStrictHostKeyChecking=no root@$node "
@@ -829,9 +837,9 @@ function install_nodes(){
     if (( err == 99 )) ; then # this node needs to be rebooted
       # don't reboot if node is the install-from node!
       if [[ "$ip" == "$INSTALL_FROM_IP" ]] ; then
-        DEFERRED_REBOOT_NODE="$ssh_target"
+        DEFERRED_REBOOT_NODE="$node"
       else
-	REBOOT_NODES+=("$ssh_target")
+	REBOOT_NODES+=("$node")
       fi
     elif (( err != 0 )) ; then # fatal error in install.sh so quit now
       display " *** ERROR! prep_node script exited with error: $err ***" \
@@ -843,7 +851,7 @@ function install_nodes(){
   # main #
   #      #
   for (( i=0; i<$NUMNODES; i++ )); do
-      node=${HOSTS[$i]}
+      node=${HOSTS[$i]}; ip=${HOST_IPS[$i]}
       if [[ $USING_DSN == true ]] ; then # need to get ip for node
 	ip=($(getent hosts $node)) # -> (ip-addr hostname)
 	ip=${ip[0]} # extract the ip-addr
@@ -981,8 +989,6 @@ SUBDIRS=${SUBDIRS//$'\n'/ } # replace newline with space
 echo
 display "-- Verifying the deploy environment, including the \"hosts\" file format:" $LOG_INFO
 verify_local_deploy_setup
-# if the HOST_IPS array is empty then we're using dns
-(( ${#HOST_IPS[@] == 0 )) && USING_DNS=true || USING_DNS=false
 firstNode=${HOSTS[0]}
 
 report_deploy_values

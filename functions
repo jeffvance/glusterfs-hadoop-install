@@ -106,7 +106,8 @@ function verify_local_deploy_setup(){
   #
   # Sets the folowing global variables:
   #   HOSTS()
-  #   HOST_IPS() -- is empty if dns is being used
+  #   HOST_IPS()
+  #   USING_DNS, true or false, depending on content of local ./hosts file
   #   NUMNODES
   #   MGMT_NODE
   #   MGMT_NODE_IN_POOL
@@ -115,7 +116,7 @@ function verify_local_deploy_setup(){
 
     local i; local host=; local ip=; local ssh_target
     local hosts_ary; local numTokens
-    local numLines; local expectIP; local lineNum
+    local numLines; local lineNum
     local tmphosts="$(mktemp)"
 
     # regular expression to validate ip addresses
@@ -135,19 +136,19 @@ function verify_local_deploy_setup(){
     numTokens=${#hosts_ary[@]}
 
     # do we expect to have the ip column or not?
-    (( numLines == numTokens )) || expectIP=true
-echo "**** numLines=$numLines, expectIP=$expectIP, numTok=$numTokens"
+    (( numLines == numTokens )) && USING_DNS=true || USING_DNS=false
+echo "**** numLines=$numLines, USING_DNS=$USING_DNS, numTok=$numTokens"
 echo "**** hosts_ary=${hosts_ary[@]}"
 
     # hosts file format: ip-address  hostname  # one pair per line
     for (( i=0; i<$numTokens; i++ )); do
 	ssh_target=''
 	# set 1-based line/record number
-	[[ -n "$expectIP" ]] && lineNum=$(((i/2)+1)) || lineNum=$((i+1))
+	[[ $USING_DNS == true ]] && lineNum=$((i+1)) || lineNum=$(((i/2)+1))
 echo "**** lineNum=$lineNum", i=$i
 
 	# see if this field is an ip address
-	if [[ -n "$expectIP" ]] ; then
+	if [[ $USING_DNS == false ]] ; then
 	  ip=${hosts_ary[$i]}
 echo "***** ip=$ip"
 	  if [[ $ip =~ $VALID_IP_RE ]] ; then
@@ -163,6 +164,10 @@ echo "***** ip=$ip"
 
 	# hostname:
 	host=${hosts_ary[$i]}
+	if [[ $USING_DNS == true ]] ; then # need to get ip
+	  ip=($(getent hosts "$host")) # -> (ip-addr hostname)
+	  ip=${ip[0]} # extract the ip-addr
+	fi
 echo "***** host=$host"
         # down-case if any upper-case letters in host
 	if [[ "$host" =~ [A-Z]+ ]] ; then

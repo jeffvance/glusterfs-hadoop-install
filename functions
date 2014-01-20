@@ -152,7 +152,6 @@ echo "**** lineNum=$lineNum", i=$i
 	  ip=${hosts_ary[$i]}
 echo "***** ip=$ip"
 	  if [[ $ip =~ $VALID_IP_RE ]] ; then
-	    HOST_IPS+=($ip)
 	    ssh_target=$ip
             ((i++))
 	  elif [[ "$verify_arg" == true ]] ; then
@@ -168,7 +167,7 @@ echo "***** ip=$ip"
 	  ip=($(getent hosts "$host")) # -> (ip-addr hostname)
 	  ip=${ip[0]} # extract the ip-addr
 	fi
-echo "***** host=$host"
+echo "***** host=$host, ip=$ip"
         # down-case if any upper-case letters in host
 	if [[ "$host" =~ [A-Z]+ ]] ; then
 	  display "   ...down-casing $host" $LOG_DEBUG
@@ -180,7 +179,7 @@ echo "***** host=$host"
 	  ((errcnt++))
 	  break # exit loop
         fi
-	# set ssh target node based on host or ip
+	# set ssh target not already an ip then set it to host
 	[[ -z "$ssh_target" ]] && ssh_target="$host"
         # set MGMT_NODE to first node unless --mgmt-node specified
 	if [[ -z "$MGMT_NODE" && $lineNum == 1 ]] ; then
@@ -189,7 +188,6 @@ echo "***** host=$host"
 	elif [[ -n "$MGMT_NODE" && "$MGMT_NODE" == "$host" ]] ; then
           MGMT_NODE_IN_POOL=true
         fi
-	HOSTS+=($host)
 
 	if [[ "$verify_arg" == true ]] ; then
           # verify connectivity from localhost to data node. Note: ip used since
@@ -202,6 +200,8 @@ echo "***** host=$host"
 	    break # exit loop
 	  fi
 	fi
+	HOSTS+=($host)
+	HOST_IPS+=($ip)
     done
 
     (( errcnt != 0 )) && return # errors in hosts checking loop are fatal

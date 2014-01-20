@@ -52,7 +52,6 @@ USING_DNS=${_ARGS[USING_DNS]} # true|false
 HOSTS=($2)
 HOST_IPS=($3)
 echo -e "*** $(basename $0) 1=$1\n1=$(declare -p _ARGS),\n2=${HOSTS[@]},\n3=${HOST_IPS[@]}"
-exit
 
 NUMNODES=${#HOSTS[@]}
 

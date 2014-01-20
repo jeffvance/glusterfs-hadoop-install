@@ -597,7 +597,7 @@ function setup(){
   #  mount is prepended to it
   local MR_DIRS=("$GLUSTER_MNT" 'mapred' 'mapred/system' 'tmp' 'user' 'mr-history' "$YARN_NM_REMOTE_APP_LOG_DIR" "$MR_JOB_HIST_INTERMEDIATE_DONE" "$MR_JOB_HIST_DONE" "$YARN_STAGE" "$MR_JOB_HIST_APPS_LOGS")
   local MR_PERMS=(0775 0770 0755 1777 0775 0755 1777 1777 0750 0770 1777)
-  local MR_OWNERS=("YARN_U" "$MAPRED_U" "$MAPRED_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U")
+  local MR_OWNERS=("$YARN_U" "$MAPRED_U" "$MAPRED_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U")
 
   # 1) mkfs.xfs brick_dev on every node
   # 2) mkdir brick_dir and vol_mnt on every node

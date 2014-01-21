@@ -896,7 +896,7 @@ function reboot_nodes(){
   display "-- $num $msg will be rebooted..." $LOG_SUMMARY
   for ip in "${REBOOT_NODES[@]}"; do
       display "   * rebooting node: $ip..." $LOG_INFO
-      ssh -oStrictHostKeyChecking=no root@$ip "reboot -f && exit"
+      ssh -oStrictHostKeyChecking=no root@$ip "reboot && exit"
   done
 
   # makes sure all rebooted nodes are back up before returning
@@ -945,9 +945,11 @@ function reboot_self(){
   echo "    installation of one or more kernel patches."
   [[ "$ANS_YES" == 'n' ]] && read -p "    Reboot now? [y|N] " ans
   case $ans in
-    y|yes|Y|YES|Yes) reboot
+    y|yes|Y|YES|Yes)
+	display "*** REBOOTING self..." $LOG_INFO
+	reboot
     ;;
-    *) exit 0
+    *)  exit 0
   esac
   echo "No reboot! You must reboot your system prior to running Hadoop jobs."
 }

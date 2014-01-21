@@ -1004,7 +1004,7 @@ display "-- Setting up brick and volume mounts, creating and starting volume" \
 setup
 
 echo
-display "-- Performance config --" $LOG_SUMMARY
+display "-- Performance config..." $LOG_SUMMARY
 perf_config
 
 # reboot nodes where a kernel patch was installed

@@ -32,7 +32,8 @@ function display(){
 }
 
 # fixup_etc_host_file: append all ips + hostnames to /etc/hosts, unless the
-# hostnames already exist.
+# hostnames already exist. NOTE: only call if local hosts file contains ip
+# addresses, ie, not using dns.
 #
 function fixup_etc_hosts_file(){
 
@@ -137,20 +138,16 @@ function verify_local_deploy_setup(){
 
     # do we expect to have the ip column or not?
     (( numLines == numTokens )) && USING_DNS=true || USING_DNS=false
-echo "**** numLines=$numLines, USING_DNS=$USING_DNS, numTok=$numTokens"
-echo "**** hosts_ary=${hosts_ary[@]}"
 
     # hosts file format: ip-address  hostname  # one pair per line
     for (( i=0; i<$numTokens; i++ )); do
 	ssh_target=''
 	# set 1-based line/record number
 	[[ $USING_DNS == true ]] && lineNum=$((i+1)) || lineNum=$(((i/2)+1))
-echo "**** lineNum=$lineNum", i=$i
 
 	# see if this field is an ip address
 	if [[ $USING_DNS == false ]] ; then
 	  ip=${hosts_ary[$i]}
-echo "***** ip=$ip"
 	  if [[ $ip =~ $VALID_IP_RE ]] ; then
 	    ssh_target=$ip
             ((i++))
@@ -167,7 +164,6 @@ echo "***** ip=$ip"
 	  ip=($(getent hosts "$host")) # -> (ip-addr hostname)
 	  ip=${ip[0]} # extract the ip-addr
 	fi
-echo "***** host=$host, ip=$ip"
         # down-case if any upper-case letters in host
 	if [[ "$host" =~ [A-Z]+ ]] ; then
 	  display "   ...down-casing $host" $LOG_DEBUG
@@ -237,7 +233,5 @@ echo "***** host=$host, ip=$ip"
     exit 1
   fi
   display "   ...verified" $LOG_DEBUG
-echo "********* HOSTS=${HOSTS[@]}"
-echo "********* IPs=${HOST_IPS[@]}"
 }
 

@@ -212,13 +212,15 @@ function install_common(){
   display "-- Disable firewall" $LOG_SUMMARY
   disable_firewall
 
-  # set hostname
+  # potentially append local hosts file entries to /etc/hosts, if not using dns
   if [[ $USING_DNS == false ]] ; then # ok to update /etc/hosts
     echo
     display "-- Setting up IP -> hostname mapping" $LOG_SUMMARY
     fixup_etc_hosts_file
   fi
-  hostname $NODE
+
+  # set hostname, if not set
+  [[ -z "$(hostname)" ]] && hostname $NODE
 
   # set up sudoers file for mapred and yarn users
   sudoers

@@ -402,13 +402,13 @@ function cleanup(){
 function verify_pool_created(){
 
   local DESIRED_STATE="Peer in Cluster (Connected)"
-  local out; local i=0; local LIMIT=10
+  local out; local i=0; local LIMIT=$((NUMNODES * 5))
 
   while (( i < LIMIT )) ; do # don't loop forever
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode \
 	"gluster peer status|tail -n 1")" # "State:"
       [[ -n "$out" && "${out#* }" == "$DESIRED_STATE" ]] && break
-      sleep 1
+      sleep 2
      ((i++))
   done
 
@@ -426,13 +426,13 @@ function verify_pool_created(){
 #
 function verify_vol_created(){
 
-  local i=0; local LIMIT=10
+  local i=0; local LIMIT=$((NUMNODES * 5))
 
   while (( i < LIMIT )) ; do # don't loop forever
       ssh -oStrictHostKeyChecking=no root@$firstNode \
 	"gluster volume info $VOLNAME >& /dev/null"
       (( $? == 0 )) && break
-      sleep 1
+      sleep 2
       ((i++))
   done
 
@@ -451,7 +451,7 @@ function verify_vol_created(){
 #
 function verify_vol_started(){
 
-  local i=0; local LIMIT=10; local rtn
+  local i=0; local rtn; local LIMIT=$((NUMNODES * 5))
   local FILTER='^Online' # grep filter
   local ONLINE=': Y'     # grep not-match value
 
@@ -464,7 +464,7 @@ function verify_vol_started(){
 		wc -l
 	")"
       (( rtn == 0 )) && break # exit loop
-      sleep 1
+      sleep 2
       ((i++))
   done
 

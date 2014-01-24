@@ -313,6 +313,189 @@ function report_deploy_values(){
   esac
 }
 
+# function verify_hadoop_gid:
+#
+function verify_hadoop_gid(){
+
+  local grp="$1"
+  local node; local out; local gid
+  local gids=(); local uniq_gids=()
+
+echo "********* grp=$grp"
+  for node in "${HOSTS[@]}" ; do
+      out="$(ssh -oStrictHostKeyChecking=no root@$node "getent group $grp")"
+      if (( $? != 0 )) || [[ -z "$out" ]] ; then
+	display "ERROR: group $grp not created on $node" $LOG_FORCE
+	exit 2
+      fi
+      # extract gid, "hadoop:x:<gid>", eg hadoop:x:500;
+      gid=${out%:}   # delete trailing colon
+      gid=${gid##*:} # extract gid
+echo "******* gid=$gid"
+      gids+=($gid)
+  done
+
+  uniq_gids=($(printf '%s\n' "${gids[@]}" | sort -u))
+  if (( ${#uniq_gids[@]} > 1 )) ; then # we have a problem...
+    display "ERROR: \"$grp\" group has inconsistent GIDs across cluster. These GIDs found: ${uniq_gids[@]}" $LOG_FORCE
+    exit 3
+  fi
+echo "***** out of verify_hadoop_gid"
+}
+
+# function verify_user_uids:
+#
+function verify_user_uids(){
+
+echo "********* in verify_user_uids, 1=$1 *=$*, @=$@"
+  local users=($@)
+  local node; local out; local user
+  local uids=(); local uniq_uids=()
+echo "****** users=${users[@]}, cnt=${#users[@]}"
+
+  for user in "$users[@]"; do
+     for node in "${HOSTS[@]}" ; do
+echo "***** user=$user, node=$node"
+	out="$(ssh -oStrictHostKeyChecking=no root@$node "id -u $user")"
+	if (( $? != 0 )) || [[ -z "$out" ]] ; then
+	  display "ERROR: user $user not created on $node" $LOG_FORCE
+	  exit 4
+	fi
+	uids+=($out)
+     done
+
+     uniq_uids=($(printf '%s\n' "${uids[@]}" | sort -u))
+     if (( ${#uniq_uids[@]} > 1 )) ; then # we have a problem...
+       display "ERROR: \"$user\" user has inconsistent UIDs across cluster. These UIDs found: ${uniq_uids[@]}" $LOG_FORCE
+       exit 5
+     fi
+  done
+echo "***** out of verify_user_uids"
+}
+
+# verify_peer_detach: there are timing windows when using ssh and the gluster
+# cli. This function returns once it has confirmed that the number of nodes in
+# the trusted pool is zero, or a predefined number of attempts have been made.
+#
+function verify_peer_detach(){
+
+  local out; local i=0; local LIMIT=$((NUMNODES * 5))
+
+  while (( i < LIMIT )) ; do # don't loop forever
+      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode \
+	"gluster peer status")" # "Number of Peers: x"
+      [[ $? == 0 && -n "$out" && ${out##*: } == 0 ]] && break
+      sleep 2
+     ((i++))
+  done
+
+  if (( i < LIMIT )) ; then 
+    display "   Trusted pool detached..." $LOG_DEBUG
+  else
+    display "   ERROR: Trusted pool NOT detached..." $LOG_FORCE
+    exit 6
+  fi
+}
+
+# verify_pool_create: there are timing windows when using ssh and the gluster
+# cli. This function returns once it has confirmed that the number of nodes in
+# the trusted pool equals the expected number, or a predefined number of 
+# attempts have been made.
+#
+function verify_pool_created(){
+
+  local DESIRED_STATE="Peer in Cluster (Connected)"
+  local out; local i=0; local LIMIT=$((NUMNODES * 5))
+
+  while (( i < LIMIT )) ; do # don't loop forever
+      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode \
+	"gluster peer status|tail -n 1")" # "State:"
+      [[ -n "$out" && "${out#* }" == "$DESIRED_STATE" ]] && break
+      sleep 2
+     ((i++))
+  done
+
+  if (( i < LIMIT )) ; then 
+    display "   Trusted pool formed..." $LOG_DEBUG
+  else
+    display "   ERROR: Trusted pool NOT formed..." $LOG_FORCE
+    exit 7
+  fi
+}
+
+# verify_vol_created: there are timing windows when using ssh and the gluster
+# cli. This function returns once it has confirmed that $VOLNAME has been
+# create, or a pre-defined number of attempts have been made.
+#
+function verify_vol_created(){
+
+  local i=0; local LIMIT=$((NUMNODES * 5))
+
+  while (( i < LIMIT )) ; do # don't loop forever
+      ssh -oStrictHostKeyChecking=no root@$firstNode \
+	"gluster volume info $VOLNAME >& /dev/null"
+      (( $? == 0 )) && break
+      sleep 2
+      ((i++))
+  done
+
+  if (( i < LIMIT )) ; then 
+    display "   Volume \"$VOLNAME\" created..." $LOG_DEBUG
+  else
+    display "   ERROR: Volume \"$VOLNAME\" creation failed..." $LOG_FORCE
+    exit 8
+  fi
+}
+
+# verify_vol_started: there are timing windows when using ssh and the gluster
+# cli. This function returns once it has confirmed that $VOLNAME has been
+# started, or a pre-defined number of attempts have been made. A volume is
+# considered started once all bricks are online.
+#
+function verify_vol_started(){
+
+  local i=0; local rtn; local LIMIT=$((NUMNODES * 5))
+  local FILTER='^Online' # grep filter
+  local ONLINE=': Y'     # grep not-match value
+
+  while (( i < LIMIT )) ; do # don't loop forever
+      # grep for Online status != Y
+      rtn="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+	gluster volume status $VOLNAME detail 2>/dev/null |
+	 	grep $FILTER |
+		grep -v '$ONLINE' |
+		wc -l
+	")"
+      (( rtn == 0 )) && break # exit loop
+      sleep 2
+      ((i++))
+  done
+
+  if (( i < LIMIT )) ; then 
+    display "   Volume \"$VOLNAME\" started..." $LOG_DEBUG
+  else
+    display "   ERROR: Volume \"$VOLNAME\" NOT started...\nTry gluster volume status $VOLNAME" $LOG_FORCE
+    exit 9
+  fi
+}
+
+# verify_gluster_mnt: given the passed in node, verify that the glusterfs
+# mount succeeded. This mount is important for the subsequent chmod and chown
+# on the gluster mount dir to work.
+function verify_gluster_mnt(){
+
+  local node=$1 # required
+  local out
+
+  out="$(ssh -oStrictHostKeyChecking=no root@$node \
+	"grep $GLUSTER_MNT /proc/mounts 2>&1")"
+  if (( $? != 0 )) ; then
+    display "ERROR: $GLUSTER_MNT *NOT* mounted" $LOG_FORCE
+    exit 10
+  fi
+  display "$GLUSTER_MNT mounted: $out" $LOG_DEBUG
+}
+
 # cleanup:
 # 1) umount vol if mounted
 # 2) stop vol if started **
@@ -369,8 +552,9 @@ function cleanup(){
 	"gluster peer detach ${HOSTS[$i]} 2>&1")"
       out+="\n"
     done
+    display "peer detach: $out" $LOG_DEBUG
+    verify_peer_detach
   fi
-  display "peer detach: $out" $LOG_DEBUG
 
   # 5) rm vol_mnt on every node
   # 6) unmount brick_mnt on every node, if xfs mounted
@@ -392,105 +576,6 @@ function cleanup(){
       out+="\n"
   done
   display "rm vol_mnt, umount brick, rm brick: $out" $LOG_DEBUG
-}
-
-# verify_pool_create: there are timing windows when using ssh and the gluster
-# cli. This function returns once it has confirmed that the number of nodes in
-# the trusted pool equals the expected number, or a predefined number of 
-# attempts have been made.
-#
-function verify_pool_created(){
-
-  local DESIRED_STATE="Peer in Cluster (Connected)"
-  local out; local i=0; local LIMIT=$((NUMNODES * 5))
-
-  while (( i < LIMIT )) ; do # don't loop forever
-      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode \
-	"gluster peer status|tail -n 1")" # "State:"
-      [[ -n "$out" && "${out#* }" == "$DESIRED_STATE" ]] && break
-      sleep 2
-     ((i++))
-  done
-
-  if (( i < LIMIT )) ; then 
-    display "   Trusted pool formed..." $LOG_DEBUG
-  else
-    display "   FATAL ERROR: Trusted pool NOT formed..." $LOG_FORCE
-    exit 3
-  fi
-}
-
-# verify_vol_created: there are timing windows when using ssh and the gluster
-# cli. This function returns once it has confirmed that $VOLNAME has been
-# create, or a pre-defined number of attempts have been made.
-#
-function verify_vol_created(){
-
-  local i=0; local LIMIT=$((NUMNODES * 5))
-
-  while (( i < LIMIT )) ; do # don't loop forever
-      ssh -oStrictHostKeyChecking=no root@$firstNode \
-	"gluster volume info $VOLNAME >& /dev/null"
-      (( $? == 0 )) && break
-      sleep 2
-      ((i++))
-  done
-
-  if (( i < LIMIT )) ; then 
-    display "   Volume \"$VOLNAME\" created..." $LOG_DEBUG
-  else
-    display "   FATAL ERROR: Volume \"$VOLNAME\" creation failed..." $LOG_FORCE
-    exit 5
-  fi
-}
-
-# verify_vol_started: there are timing windows when using ssh and the gluster
-# cli. This function returns once it has confirmed that $VOLNAME has been
-# started, or a pre-defined number of attempts have been made. A volume is
-# considered started once all bricks are online.
-#
-function verify_vol_started(){
-
-  local i=0; local rtn; local LIMIT=$((NUMNODES * 5))
-  local FILTER='^Online' # grep filter
-  local ONLINE=': Y'     # grep not-match value
-
-  while (( i < LIMIT )) ; do # don't loop forever
-      # grep for Online status != Y
-      rtn="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	gluster volume status $VOLNAME detail 2>/dev/null |
-	 	grep $FILTER |
-		grep -v '$ONLINE' |
-		wc -l
-	")"
-      (( rtn == 0 )) && break # exit loop
-      sleep 2
-      ((i++))
-  done
-
-  if (( i < LIMIT )) ; then 
-    display "   Volume \"$VOLNAME\" started..." $LOG_DEBUG
-  else
-    display "   FATAL ERROR: Volume \"$VOLNAME\" NOT started...\nTry gluster volume status $VOLNAME" $LOG_FORCE
-    exit 7
-  fi
-}
-
-# verify_gluster_mnt: given the passed in node, verify that the glusterfs
-# mount succeeded. This mount is important for the subsequent chmod and chown
-# on the gluster mount dir to work.
-function verify_gluster_mnt(){
-
-  local node=$1 # required
-  local out
-
-  out="$(ssh -oStrictHostKeyChecking=no root@$node \
-	"grep $GLUSTER_MNT /proc/mounts 2>&1")"
-  if (( $? != 0 )) ; then
-    display "ERROR: $GLUSTER_MNT *NOT* mounted" $LOG_FORCE
-    exit 8
-  fi
-  display "$GLUSTER_MNT mounted: $out" $LOG_DEBUG
 }
 
 # create_trusted_pool: create the trusted storage pool. No error if the pool
@@ -543,11 +628,10 @@ function setup(){
   local GLUSTER_MNT_OPTS="entry-timeout=0,attribute-timeout=0,use-readdirp=no,acl,_netdev"
   local dir; local perm; local owner
   local user; local uid
-  local HADOOP_G='hadoop'; local HADOOP_GID=500
+  local HADOOP_G='hadoop'
   local MAPRED_U='mapred'
   local YARN_U='yarn'; local YARN_UID=502
-  local MR_USERS=("$MAPRED_U" "$YARN_U") # paired with MR_UIDS below
-  local MR_UIDS=('X' 502)
+  local MR_USERS=("$MAPRED_U" "$YARN_U")
   local YARN_NM_REMOTE_APP_LOG_DIR='tmp/logs'
   local MR_JOB_HIST_INTERMEDIATE_DONE='mr-history/tmp'
   local MR_JOB_HIST_DONE='mr-history/done'
@@ -579,21 +663,21 @@ function setup(){
       out="$(ssh -oStrictHostKeyChecking=no root@$node \
 	"mkfs -t xfs -i size=512 -f $BRICK_DEV 2>&1")"
       (( $? != 0 )) && {
-        display "ERROR: $node: mkfs.xfs: $out" $LOG_FORCE; exit 9; }
+        display "ERROR: $node: mkfs.xfs: $out" $LOG_FORCE; exit 11; }
       display "mkfs.xfs: $out" $LOG_DEBUG
 
       # use volname dir under brick by convention
       out="$(ssh -oStrictHostKeyChecking=no root@$node \
 	"mkdir -p $BRICK_MNT 2>&1")"
       (( $? != 0 )) && {
-        display "ERROR: $node: mkdir $BRICK_MNT: $out" $LOG_FORCE; exit 11; }
+        display "ERROR: $node: mkdir $BRICK_MNT: $out" $LOG_FORCE; exit 12; }
       display "mkdir $BRICK_MNT: $out" $LOG_DEBUG
 
       # make vol mnt dir
       out="$(ssh -oStrictHostKeyChecking=no root@$node \
         "mkdir -p $GLUSTER_MNT 2>&1")"
       (( $? != 0 )) && {
-        display "ERROR: $node: mkdir $GLUSTER_MNT: $out" $LOG_FORCE; exit 12; }
+        display "ERROR: $node: mkdir $GLUSTER_MNT: $out" $LOG_FORCE; exit 13; }
       display "mkdir $GLUSTER_MNT: $out" $LOG_DEBUG
 
       # append brick and gluster mounts to fstab
@@ -606,7 +690,7 @@ function setup(){
 		0 0' >>/etc/fstab
         fi")"
       (( $? != 0 )) && {
-        display "ERROR: $node: append fstab: $out" $LOG_FORCE; exit 13; }
+        display "ERROR: $node: append fstab: $out" $LOG_FORCE; exit 14; }
       display "append fstab: $out" $LOG_DEBUG
 
       # Note: mapred scratch dir must be created *after* the brick is
@@ -662,7 +746,7 @@ function setup(){
   # Note: ownership and permissions must be set *afer* the gluster vol is
   #       mounted.
   for node in "${HOSTS[@]}"; do
-      display "-- $node --" $LOG_INFO
+      display "-- $node -- mount vol and create $HADOOP_G group" $LOG_INFO
 
       # mount vol via fstab
       out="$(ssh -oStrictHostKeyChecking=no root@$node \
@@ -676,21 +760,25 @@ function setup(){
       # create hadoop group, if needed
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
         if ! getent group $HADOOP_G >/dev/null ; then
-          groupadd --gid $HADOOP_GID $HADOOP_G 2>&1 # note: no password
+          groupadd --system $HADOOP_G 2>&1 # note: no password
         fi")"
       (( $? != 0 )) && {
 	display "ERROR: $node: groupadd $HADOOP_G: $out" $LOG_FORCE; exit 23; }
       display "groupadd $HADOOP_G: $out" $LOG_DEBUG
+  done
+
+  # validate consistent hadoop group GID across cluster
+  verify_hadoop_gid "$HADOOP_G"
+
+  for node in "${HOSTS[@]}"; do
+      display "-- $node -- create users" $LOG_INFO
 
       # create the required M/R-YARN users, if needed
       for (( i=0 ; i<${#MR_USERS[@]} ; i++ )) ; do
 	user="${MR_USERS[$i]}"
-        uid="${MR_UIDS[$i]}"
-        # ignore uid if set to 'X'
-	[[ "$uid" == 'X' ]] && uid='' || uid="--uid $uid"
 	out="$(ssh -oStrictHostKeyChecking=no root@$node "
 		if ! getent passwd $user >/dev/null ; then
- 		  useradd --system $uid -g $HADOOP_G $user 2>&1
+ 		  useradd --system -g $HADOOP_G $user 2>&1
 		fi
 	       ")"
 	(( $? != 0 )) && {
@@ -698,6 +786,13 @@ function setup(){
 	  exit 25; }
 	display "useradd $user: $out" $LOG_DEBUG
       done
+  done
+
+  # validate consistent m/r-yarn user IDs across cluster
+  verify_user_uids ${MR_USERS[@]}
+
+  for node in "${HOSTS[@]}"; do
+      display "-- $node -- create hadoop directories" $LOG_INFO
 
       # create all of the M/R-YARN dirs with correct perms and owner
       for (( i=0 ; i<${#MR_DIRS[@]} ; i++ )) ; do

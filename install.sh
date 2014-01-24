@@ -321,7 +321,6 @@ function verify_hadoop_gid(){
   local node; local out; local gid
   local gids=(); local uniq_gids=()
 
-echo "********* grp=$grp"
   for node in "${HOSTS[@]}" ; do
       out="$(ssh -oStrictHostKeyChecking=no root@$node "getent group $grp")"
       if (( $? != 0 )) || [[ -z "$out" ]] ; then
@@ -331,7 +330,6 @@ echo "********* grp=$grp"
       # extract gid, "hadoop:x:<gid>", eg hadoop:x:500;
       gid=${out%:}   # delete trailing colon
       gid=${gid##*:} # extract gid
-echo "******* gid=$gid"
       gids+=($gid)
   done
 
@@ -340,22 +338,19 @@ echo "******* gid=$gid"
     display "ERROR: \"$grp\" group has inconsistent GIDs across cluster. These GIDs found: ${uniq_gids[@]}" $LOG_FORCE
     exit 3
   fi
-echo "***** out of verify_hadoop_gid"
 }
 
 # function verify_user_uids:
 #
 function verify_user_uids(){
 
-echo "********* in verify_user_uids, 1=$1 *=$*, @=$@"
   local users=($@)
   local node; local out; local user
-  local uids=(); local uniq_uids=()
-echo "****** users=${users[@]}, cnt=${#users[@]}"
+  local uids; local uniq_uids
 
-  for user in "$users[@]"; do
+  for user in "${users[@]}" ; do
+     uids=()
      for node in "${HOSTS[@]}" ; do
-echo "***** user=$user, node=$node"
 	out="$(ssh -oStrictHostKeyChecking=no root@$node "id -u $user")"
 	if (( $? != 0 )) || [[ -z "$out" ]] ; then
 	  display "ERROR: user $user not created on $node" $LOG_FORCE
@@ -370,7 +365,6 @@ echo "***** user=$user, node=$node"
        exit 5
      fi
   done
-echo "***** out of verify_user_uids"
 }
 
 # verify_peer_detach: there are timing windows when using ssh and the gluster

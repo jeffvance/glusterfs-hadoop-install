@@ -58,12 +58,10 @@ $SCRIPT [--brick-mnt <path>] [--vol-name <name>]  [--vol-mnt <path>]
            [--logfile <path>]
            [--verbose [num] ]   [-q|--quiet]         [--debug]
            [-y]                 [-h|--help]          [--old-deploy*]
+
+           brick-dev
+
 EOF
-  [[ "$RHS_INSTALL" == true ]] &&
-    echo "           [--rhn-user <name>]  [--rhn-pass <value>]"
-  
-  echo "           brick-dev"
-  echo
 }
 
 # usage: write full usage/help text to stdout.
@@ -115,16 +113,6 @@ EOF
   -q|--quiet         : suppress all output including the final summary report.
                        Internally sets verbose=9. Note: all output is still
                        written to the logfile.
-EOF
-  if [[ "$RHS_INSTALL" == true ]] ; then
-    cat <<EOF
-  --rhn-user  <name> : Red Hat Network user name. Default is to not register
-                       the storage nodes.
-  --rhn-pass <value> : RHN password for rhn-user. Default is to not register
-                       the storage nodes.
-EOF
-  fi
-  cat <<EOF
   -v|--version       : current version string.
   -h|--help          : help text (this).
 
@@ -143,8 +131,6 @@ function parse_cmd(){
 
   local OPTIONS='vhqy'
   local LONG_OPTS='brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,old-deploy,help,version,quiet,debug'
-  [[ "$RHS_INSTALL" == true ]] && 
-	LONG_OPTS+=',rhn-user:,rhn-pass:'
 
   # defaults (global variables)
   BRICK_DIR='/mnt/brick1'
@@ -155,8 +141,6 @@ function parse_cmd(){
   # "hosts" file concontains hostname ip-addr for all nodes in cluster
   HOSTS_FILE="$INSTALL_DIR/hosts"
   MGMT_NODE=''
-  RHN_USER=''
-  RHN_PASS=''
   [[ "$RHS_INSTALL" == true ]] && LOGFILE='/var/log/rhs-hadoop-install.log' ||
 	LOGFILE='/var/log/glusterfs-hadoop-install.log' 
   VERBOSE=$LOG_SUMMARY
@@ -192,12 +176,6 @@ function parse_cmd(){
 	;;
 	--mgmt-node)
 	    MGMT_NODE=$2; shift 2; continue
-	;;
-	--rhn-user)
-	    RHN_USER=$2; shift 2; continue
-	;;
-	--rhn-pass)
-	    RHN_PASS=$2; shift 2; continue
 	;;
 	--logfile)
 	    LOGFILE=$2; shift 2; continue
@@ -237,16 +215,6 @@ function parse_cmd(){
   # validate replica cnt for RHS
   (( REPLICA_CNT != 2 )) && {
 	echo "replica = 2 is the only supported value"; exit -1; } 
-
-  # --rhn-user and --rhn-pass, validate potentially supplied options
-  if [[ -n "$RHN_USER" ]] ; then
-    if [[ -z "$RHN_PASS" ]] ; then 
-      echo "Syntax error: rhn password required when rhn user specified"
-      sleep 1
-      short_usage
-      exit -1
-    fi
-  fi
 
   # --logfile, if relative pathname make absolute
   # note: needed if scripts change cwd
@@ -326,8 +294,6 @@ function report_deploy_values(){
   display "  Install-from IP:    $INSTALL_FROM_IP"  $LOG_REPORT
   display "  Included sub-dirs:  $SUBDIRS"          $LOG_REPORT
   display "  Remote install dir: $REMOTE_INSTALL_DIR"  $LOG_REPORT
-  [[ -n "$RHN_USER" ]] && \
-    display "  RHN user:           $RHN_USER"       $LOG_REPORT
   display "  \"hosts\" file:       $HOSTS_FILE"     $LOG_REPORT
   display "  Using DNS:          $USING_DNS"        $LOG_REPORT
   display "  Number of nodes:    $NUMNODES"         $LOG_REPORT
@@ -820,7 +786,7 @@ function install_nodes(){
 	[INST_STORAGE]="$install_storage" [INST_MGMT]="$install_mgmt" \
 	[MGMT_NODE]="$MGMT_NODE" [VERBOSE]="$VERBOSE" \
 	[PREP_LOG]="$PREP_NODE_LOG_PATH" [REMOTE_DIR]="$REMOTE_INSTALL_DIR" \
-	[RHN_USER]="$RHN_USER" [RHN_PASS]="$RHN_PASS" [USING_DNS]=$USING_DNS)
+	[USING_DNS]=$USING_DNS)
     out="$(ssh -oStrictHostKeyChecking=no root@$ssh_target $REMOTE_PREP_SH \
         "\"$(declare -p PREP_ARGS)\"" "\"${HOSTS[@]}\"" \ "\"${HOST_IPS[@]}\""
 	)"

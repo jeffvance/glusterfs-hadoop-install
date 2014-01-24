@@ -55,9 +55,8 @@ $SCRIPT [-v|--version] | [-h|--help]
 
 $SCRIPT [--brick-mnt <path>] [--vol-name <name>]  [--vol-mnt <path>]
            [--replica <num>]    [--hosts <path>]     [--mgmt-node <node>]
-           [--logfile <path>]
+           [--logfile <path>]   [-y]
            [--verbose [num] ]   [-q|--quiet]         [--debug]
-           [-y]                 [-h|--help]          [--old-deploy*]
            brick-dev
 
 EOF
@@ -129,7 +128,7 @@ EOF
 function parse_cmd(){
 
   local OPTIONS='vhqy'
-  local LONG_OPTS='brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,old-deploy,help,version,quiet,debug'
+  local LONG_OPTS='brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,help,version,quiet,debug'
 
   # defaults (global variables)
   BRICK_DIR='/mnt/brick1'
@@ -192,9 +191,6 @@ function parse_cmd(){
 	;;
 	--debug)
 	    VERBOSE=$LOG_DEBUG; shift; continue
-	;;
-	--old-deploy)
-	    NEW_DEPLOY=false ;shift; continue
 	;;
 	--)  # no more args to parse
 	    shift; break
@@ -982,6 +978,8 @@ perf_config
 # reboot nodes if needed
 reboot_nodes
 
+echo
+display "**** This script can be re-run anytime! ****" $LOG_REPORT
 echo
 display "$(date). End: $SCRIPT" $LOG_REPORT
 echo

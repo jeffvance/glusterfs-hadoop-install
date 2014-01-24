@@ -313,7 +313,9 @@ function report_deploy_values(){
   esac
 }
 
-# function verify_hadoop_gid:
+# function verify_hadoop_gid: check that the gid for the passed-in group is
+# the same on all nodes.
+# Args: $1=group name
 #
 function verify_hadoop_gid(){
 
@@ -334,13 +336,15 @@ function verify_hadoop_gid(){
   done
 
   uniq_gids=($(printf '%s\n' "${gids[@]}" | sort -u))
-  if (( ${#uniq_gids[@]} > 1 )) ; then # we have a problem...
+  if (( ${#uniq_gids[@]} > 1 )) ; then
     display "ERROR: \"$grp\" group has inconsistent GIDs across cluster. These GIDs found: ${uniq_gids[@]}" $LOG_FORCE
     exit 3
   fi
 }
 
-# function verify_user_uids:
+# function verify_user_uids: check that the uid for the passed-in user(s) is
+# the same on all nodes.
+# Args: $@=user names
 #
 function verify_user_uids(){
 
@@ -360,7 +364,7 @@ function verify_user_uids(){
      done
 
      uniq_uids=($(printf '%s\n' "${uids[@]}" | sort -u))
-     if (( ${#uniq_uids[@]} > 1 )) ; then # we have a problem...
+     if (( ${#uniq_uids[@]} > 1 )) ; then
        display "ERROR: \"$user\" user has inconsistent UIDs across cluster. These UIDs found: ${uniq_uids[@]}" $LOG_FORCE
        exit 5
      fi

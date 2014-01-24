@@ -65,14 +65,8 @@
   part of the tarball, but an example hosts file is provided. The "hosts" file
   is expected to be created in the same directory where the tarball has been 
   downloaded. If a different location is required the "--hosts" option can be 
-  used to specify the "hosts" file path. The "hosts" file contains a list of IP
-  adress followed by hostname (same format as /etc/hosts), one pair per line.
-  Each line represents one node in the storage cluster (gluster trusted pool).
-  Example:
-     ip-for-node-1 hostname-for-node-1
-     ip-for-node-3 hostname-for-node-3
-     ip-for-node-2 hostname-for-node-2
-     ip-for-node-4 hostname-for-node-4
+  used to specify the "hosts" file path. The "hosts" file is defined in the
+  included "hosts.example" file, which should be read carefully. 
  
   IMPORTANT: the node order in the hosts file is critical for two reasons:
   1) Assuming the storage volume is created with replica 2 then each pair of

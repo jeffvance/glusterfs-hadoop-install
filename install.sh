@@ -58,7 +58,6 @@ $SCRIPT [--brick-mnt <path>] [--vol-name <name>]  [--vol-mnt <path>]
            [--logfile <path>]
            [--verbose [num] ]   [-q|--quiet]         [--debug]
            [-y]                 [-h|--help]          [--old-deploy*]
-
            brick-dev
 
 EOF

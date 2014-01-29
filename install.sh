@@ -25,9 +25,10 @@
 
 # set global variables
 SCRIPT=$(basename $0)
-INSTALL_VER='0.57'   # self version
+INSTALL_VER='0.60'   # self version
 INSTALL_DIR=$PWD     # name of deployment (install-from) dir
-INSTALL_FROM_IP=$(hostname -i)
+INSTALL_FROM_IP=($(hostname -I))
+INSTALL_FROM_IP=${INSTALL_FROM_IP[$(( ${#INSTALL_FROM_IP[@]}-1 ))]} # last ntry
 REMOTE_INSTALL_DIR="/tmp/rhs-hadoop-install/" # on each node
 # companion install script name
 PREP_SH='prep_node.sh' # companion script run on each node
@@ -54,15 +55,11 @@ $SCRIPT [-v|--version] | [-h|--help]
 
 $SCRIPT [--brick-mnt <path>] [--vol-name <name>]  [--vol-mnt <path>]
            [--replica <num>]    [--hosts <path>]     [--mgmt-node <node>]
-           [--logfile <path>]
+           [--logfile <path>]   [-y]
            [--verbose [num] ]   [-q|--quiet]         [--debug]
-           [-y]                 [-h|--help]          [--old-deploy*]
+           brick-dev
+
 EOF
-  [[ "$RHS_INSTALL" == true ]] &&
-    echo "           [--rhn-user <name>]  [--rhn-pass <value>]"
-  
-  echo "           brick-dev"
-  echo
 }
 
 # usage: write full usage/help text to stdout.
@@ -114,16 +111,6 @@ EOF
   -q|--quiet         : suppress all output including the final summary report.
                        Internally sets verbose=9. Note: all output is still
                        written to the logfile.
-EOF
-  if [[ "$RHS_INSTALL" == true ]] ; then
-    cat <<EOF
-  --rhn-user  <name> : Red Hat Network user name. Default is to not register
-                       the storage nodes.
-  --rhn-pass <value> : RHN password for rhn-user. Default is to not register
-                       the storage nodes.
-EOF
-  fi
-  cat <<EOF
   -v|--version       : current version string.
   -h|--help          : help text (this).
 
@@ -141,9 +128,7 @@ EOF
 function parse_cmd(){
 
   local OPTIONS='vhqy'
-  local LONG_OPTS='brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,old-deploy,help,version,quiet,debug'
-  [[ "$RHS_INSTALL" == true ]] && 
-	LONG_OPTS+=',rhn-user:,rhn-pass:'
+  local LONG_OPTS='brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,help,version,quiet,debug'
 
   # defaults (global variables)
   BRICK_DIR='/mnt/brick1'
@@ -154,8 +139,6 @@ function parse_cmd(){
   # "hosts" file concontains hostname ip-addr for all nodes in cluster
   HOSTS_FILE="$INSTALL_DIR/hosts"
   MGMT_NODE=''
-  RHN_USER=''
-  RHN_PASS=''
   [[ "$RHS_INSTALL" == true ]] && LOGFILE='/var/log/rhs-hadoop-install.log' ||
 	LOGFILE='/var/log/glusterfs-hadoop-install.log' 
   VERBOSE=$LOG_SUMMARY
@@ -192,12 +175,6 @@ function parse_cmd(){
 	--mgmt-node)
 	    MGMT_NODE=$2; shift 2; continue
 	;;
-	--rhn-user)
-	    RHN_USER=$2; shift 2; continue
-	;;
-	--rhn-pass)
-	    RHN_PASS=$2; shift 2; continue
-	;;
 	--logfile)
 	    LOGFILE=$2; shift 2; continue
 	;;
@@ -214,9 +191,6 @@ function parse_cmd(){
 	;;
 	--debug)
 	    VERBOSE=$LOG_DEBUG; shift; continue
-	;;
-	--old-deploy)
-	    NEW_DEPLOY=false ;shift; continue
 	;;
 	--)  # no more args to parse
 	    shift; break
@@ -236,16 +210,6 @@ function parse_cmd(){
   # validate replica cnt for RHS
   (( REPLICA_CNT != 2 )) && {
 	echo "replica = 2 is the only supported value"; exit -1; } 
-
-  # --rhn-user and --rhn-pass, validate potentially supplied options
-  if [[ -n "$RHN_USER" ]] ; then
-    if [[ -z "$RHN_PASS" ]] ; then 
-      echo "Syntax error: rhn password required when rhn user specified"
-      sleep 1
-      short_usage
-      exit -1
-    fi
-  fi
 
   # --logfile, if relative pathname make absolute
   # note: needed if scripts change cwd
@@ -325,9 +289,8 @@ function report_deploy_values(){
   display "  Install-from IP:    $INSTALL_FROM_IP"  $LOG_REPORT
   display "  Included sub-dirs:  $SUBDIRS"          $LOG_REPORT
   display "  Remote install dir: $REMOTE_INSTALL_DIR"  $LOG_REPORT
-  [[ -n "$RHN_USER" ]] && \
-    display "  RHN user:           $RHN_USER"       $LOG_REPORT
   display "  \"hosts\" file:       $HOSTS_FILE"     $LOG_REPORT
+  display "  Using DNS:          $USING_DNS"        $LOG_REPORT
   display "  Number of nodes:    $NUMNODES"         $LOG_REPORT
   display "  Management node:    $MGMT_NODE"        $LOG_REPORT
   display "  Volume name:        $VOLNAME"          $LOG_REPORT
@@ -348,6 +311,187 @@ function report_deploy_values(){
     ;;
     *) exit 0
   esac
+}
+
+# function verify_hadoop_gid: check that the gid for the passed-in group is
+# the same on all nodes.
+# Args: $1=group name
+#
+function verify_hadoop_gid(){
+
+  local grp="$1"
+  local node; local out; local gid
+  local gids=(); local uniq_gids=()
+
+  for node in "${HOSTS[@]}" ; do
+      out="$(ssh -oStrictHostKeyChecking=no root@$node "getent group $grp")"
+      if (( $? != 0 )) || [[ -z "$out" ]] ; then
+	display "ERROR: group $grp not created on $node" $LOG_FORCE
+	exit 2
+      fi
+      # extract gid, "hadoop:x:<gid>", eg hadoop:x:500;
+      gid=${out%:}   # delete trailing colon
+      gid=${gid##*:} # extract gid
+      gids+=($gid)
+  done
+
+  uniq_gids=($(printf '%s\n' "${gids[@]}" | sort -u))
+  if (( ${#uniq_gids[@]} > 1 )) ; then
+    display "ERROR: \"$grp\" group has inconsistent GIDs across cluster. These GIDs found: ${uniq_gids[@]}" $LOG_FORCE
+    exit 3
+  fi
+}
+
+# function verify_user_uids: check that the uid for the passed-in user(s) is
+# the same on all nodes.
+# Args: $@=user names
+#
+function verify_user_uids(){
+
+  local users=($@)
+  local node; local out; local user
+  local uids; local uniq_uids
+
+  for user in "${users[@]}" ; do
+     uids=()
+     for node in "${HOSTS[@]}" ; do
+	out="$(ssh -oStrictHostKeyChecking=no root@$node "id -u $user")"
+	if (( $? != 0 )) || [[ -z "$out" ]] ; then
+	  display "ERROR: user $user not created on $node" $LOG_FORCE
+	  exit 4
+	fi
+	uids+=($out)
+     done
+
+     uniq_uids=($(printf '%s\n' "${uids[@]}" | sort -u))
+     if (( ${#uniq_uids[@]} > 1 )) ; then
+       display "ERROR: \"$user\" user has inconsistent UIDs across cluster. These UIDs found: ${uniq_uids[@]}" $LOG_FORCE
+       exit 5
+     fi
+  done
+}
+
+# verify_peer_detach: there are timing windows when using ssh and the gluster
+# cli. This function returns once it has confirmed that the number of nodes in
+# the trusted pool is zero, or a predefined number of attempts have been made.
+#
+function verify_peer_detach(){
+
+  local out; local i=0; local LIMIT=$((NUMNODES * 5))
+
+  while (( i < LIMIT )) ; do # don't loop forever
+      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode \
+	"gluster peer status")" # "Number of Peers: x"
+      [[ $? == 0 && -n "$out" && ${out##*: } == 0 ]] && break
+      sleep 2
+     ((i++))
+  done
+
+  if (( i < LIMIT )) ; then 
+    display "   Trusted pool detached..." $LOG_DEBUG
+  else
+    display "   ERROR: Trusted pool NOT detached..." $LOG_FORCE
+    exit 6
+  fi
+}
+
+# verify_pool_create: there are timing windows when using ssh and the gluster
+# cli. This function returns once it has confirmed that the number of nodes in
+# the trusted pool equals the expected number, or a predefined number of 
+# attempts have been made.
+#
+function verify_pool_created(){
+
+  local DESIRED_STATE="Peer in Cluster (Connected)"
+  local out; local i=0; local LIMIT=$((NUMNODES * 5))
+
+  while (( i < LIMIT )) ; do # don't loop forever
+      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode \
+	"gluster peer status|tail -n 1")" # "State:"
+      [[ -n "$out" && "${out#* }" == "$DESIRED_STATE" ]] && break
+      sleep 2
+     ((i++))
+  done
+
+  if (( i < LIMIT )) ; then 
+    display "   Trusted pool formed..." $LOG_DEBUG
+  else
+    display "   ERROR: Trusted pool NOT formed..." $LOG_FORCE
+    exit 7
+  fi
+}
+
+# verify_vol_created: there are timing windows when using ssh and the gluster
+# cli. This function returns once it has confirmed that $VOLNAME has been
+# create, or a pre-defined number of attempts have been made.
+#
+function verify_vol_created(){
+
+  local i=0; local LIMIT=$((NUMNODES * 5))
+
+  while (( i < LIMIT )) ; do # don't loop forever
+      ssh -oStrictHostKeyChecking=no root@$firstNode \
+	"gluster volume info $VOLNAME >& /dev/null"
+      (( $? == 0 )) && break
+      sleep 2
+      ((i++))
+  done
+
+  if (( i < LIMIT )) ; then 
+    display "   Volume \"$VOLNAME\" created..." $LOG_DEBUG
+  else
+    display "   ERROR: Volume \"$VOLNAME\" creation failed..." $LOG_FORCE
+    exit 8
+  fi
+}
+
+# verify_vol_started: there are timing windows when using ssh and the gluster
+# cli. This function returns once it has confirmed that $VOLNAME has been
+# started, or a pre-defined number of attempts have been made. A volume is
+# considered started once all bricks are online.
+#
+function verify_vol_started(){
+
+  local i=0; local rtn; local LIMIT=$((NUMNODES * 5))
+  local FILTER='^Online' # grep filter
+  local ONLINE=': Y'     # grep not-match value
+
+  while (( i < LIMIT )) ; do # don't loop forever
+      # grep for Online status != Y
+      rtn="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+	gluster volume status $VOLNAME detail 2>/dev/null |
+	 	grep $FILTER |
+		grep -v '$ONLINE' |
+		wc -l
+	")"
+      (( rtn == 0 )) && break # exit loop
+      sleep 2
+      ((i++))
+  done
+
+  if (( i < LIMIT )) ; then 
+    display "   Volume \"$VOLNAME\" started..." $LOG_DEBUG
+  else
+    display "   ERROR: Volume \"$VOLNAME\" NOT started...\nTry gluster volume status $VOLNAME" $LOG_FORCE
+    exit 9
+  fi
+}
+
+# verify_gluster_mnt: given the passed in node, verify that the glusterfs
+# mount succeeded. This mount is important for the subsequent chmod and chown
+# on the gluster mount dir to work.
+function verify_gluster_mnt(){
+
+  local node=$1 # required
+  local out
+
+  out="$(ssh -oStrictHostKeyChecking=no root@$node \
+	"grep $GLUSTER_MNT /proc/mounts 2>&1")"
+  if (( $? != 0 )) ; then
+    display "ERROR: $GLUSTER_MNT *NOT* mounted" $LOG_FORCE
+    exit 10
+  fi
+  display "$GLUSTER_MNT mounted: $out" $LOG_DEBUG
 }
 
 # cleanup:
@@ -406,8 +550,9 @@ function cleanup(){
 	"gluster peer detach ${HOSTS[$i]} 2>&1")"
       out+="\n"
     done
+    display "peer detach: $out" $LOG_DEBUG
+    verify_peer_detach
   fi
-  display "peer detach: $out" $LOG_DEBUG
 
   # 5) rm vol_mnt on every node
   # 6) unmount brick_mnt on every node, if xfs mounted
@@ -429,105 +574,6 @@ function cleanup(){
       out+="\n"
   done
   display "rm vol_mnt, umount brick, rm brick: $out" $LOG_DEBUG
-}
-
-# verify_pool_create: there are timing windows when using ssh and the gluster
-# cli. This function returns once it has confirmed that the number of nodes in
-# the trusted pool equals the expected number, or a predefined number of 
-# attempts have been made.
-#
-function verify_pool_created(){
-
-  local DESIRED_STATE="Peer in Cluster (Connected)"
-  local out; local i=0; local LIMIT=10
-
-  while (( i < LIMIT )) ; do # don't loop forever
-      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode \
-	"gluster peer status|tail -n 1")" # "State:"
-      [[ -n "$out" && "${out#* }" == "$DESIRED_STATE" ]] && break
-      sleep 1
-     ((i++))
-  done
-
-  if (( i < LIMIT )) ; then 
-    display "   Trusted pool formed..." $LOG_DEBUG
-  else
-    display "   FATAL ERROR: Trusted pool NOT formed..." $LOG_FORCE
-    exit 3
-  fi
-}
-
-# verify_vol_created: there are timing windows when using ssh and the gluster
-# cli. This function returns once it has confirmed that $VOLNAME has been
-# create, or a pre-defined number of attempts have been made.
-#
-function verify_vol_created(){
-
-  local i=0; local LIMIT=10
-
-  while (( i < LIMIT )) ; do # don't loop forever
-      ssh -oStrictHostKeyChecking=no root@$firstNode \
-	"gluster volume info $VOLNAME >& /dev/null"
-      (( $? == 0 )) && break
-      sleep 1
-      ((i++))
-  done
-
-  if (( i < LIMIT )) ; then 
-    display "   Volume \"$VOLNAME\" created..." $LOG_DEBUG
-  else
-    display "   FATAL ERROR: Volume \"$VOLNAME\" creation failed..." $LOG_FORCE
-    exit 5
-  fi
-}
-
-# verify_vol_started: there are timing windows when using ssh and the gluster
-# cli. This function returns once it has confirmed that $VOLNAME has been
-# started, or a pre-defined number of attempts have been made. A volume is
-# considered started once all bricks are online.
-#
-function verify_vol_started(){
-
-  local i=0; local LIMIT=10; local rtn
-  local FILTER='^Online' # grep filter
-  local ONLINE=': Y'     # grep not-match value
-
-  while (( i < LIMIT )) ; do # don't loop forever
-      # grep for Online status != Y
-      rtn="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	gluster volume status $VOLNAME detail 2>/dev/null |
-	 	grep $FILTER |
-		grep -v '$ONLINE' |
-		wc -l
-	")"
-      (( rtn == 0 )) && break # exit loop
-      sleep 1
-      ((i++))
-  done
-
-  if (( i < LIMIT )) ; then 
-    display "   Volume \"$VOLNAME\" started..." $LOG_DEBUG
-  else
-    display "   FATAL ERROR: Volume \"$VOLNAME\" NOT started...\nTry gluster volume status $VOLNAME" $LOG_FORCE
-    exit 7
-  fi
-}
-
-# verify_gluster_mnt: given the passed in node, verify that the glusterfs
-# mount succeeded. This mount is important for the subsequent chmod and chown
-# on the gluster mount dir to work.
-function verify_gluster_mnt(){
-
-  local node=$1 # required
-  local out
-
-  out="$(ssh -oStrictHostKeyChecking=no root@$node \
-	"grep $GLUSTER_MNT /proc/mounts 2>&1")"
-  if (( $? != 0 )) ; then
-    display "ERROR: $GLUSTER_MNT *NOT* mounted" $LOG_FORCE
-    exit 8
-  fi
-  display "$GLUSTER_MNT mounted: $out" $LOG_DEBUG
 }
 
 # create_trusted_pool: create the trusted storage pool. No error if the pool
@@ -575,16 +621,15 @@ function create_trusted_pool(){
 #
 function setup(){
 
-  local i=0; local node=''; local ip=''; local out
+  local i=0; local node=''; local ip; local out
   local BRICK_MNT_OPTS="noatime,inode64"
   local GLUSTER_MNT_OPTS="entry-timeout=0,attribute-timeout=0,use-readdirp=no,acl,_netdev"
   local dir; local perm; local owner
   local user; local uid
-  local HADOOP_G='hadoop'; local HADOOP_GID=500
+  local HADOOP_G='hadoop'
   local MAPRED_U='mapred'
   local YARN_U='yarn'; local YARN_UID=502
-  local MR_USERS=("$MAPRED_U" "$YARN_U") # paired with MR_UIDS below
-  local MR_UIDS=('X' 502)
+  local MR_USERS=("$MAPRED_U" "$YARN_U")
   local YARN_NM_REMOTE_APP_LOG_DIR='tmp/logs'
   local MR_JOB_HIST_INTERMEDIATE_DONE='mr-history/tmp'
   local MR_JOB_HIST_DONE='mr-history/done'
@@ -592,7 +637,7 @@ function setup(){
   local MR_JOB_HIST_APPS_LOGS='app-logs'
   # the next 3 arrays are all paired
   # note: if a dirname is relative (doesn't start with '/') then the gluster
-  #   mount is prepended to it
+  #  mount is prepended to it
   local MR_DIRS=("$GLUSTER_MNT" 'mapred' 'mapred/system' 'tmp' 'user' 'mr-history' "$YARN_NM_REMOTE_APP_LOG_DIR" "$MR_JOB_HIST_INTERMEDIATE_DONE" "$MR_JOB_HIST_DONE" "$YARN_STAGE" "$MR_JOB_HIST_APPS_LOGS")
   local MR_PERMS=(0775 0770 0755 1777 0775 0755 1777 1777 0750 0770 1777)
   local MR_OWNERS=("$YARN_U" "$MAPRED_U" "$MAPRED_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U")
@@ -604,29 +649,31 @@ function setup(){
   # 5) mkdir mapredlocal scratch dir on every node (done after brick mount)
   display "  -- on all nodes:"                           $LOG_INFO
   display "       mkfs.xfs $BRICK_DEV..."                $LOG_INFO
-  display "       mkdir $BRICK_DIR, $GLUSTER_MNT and $MAPRED_SCRATCH_DIR..." \
-	$LOG_INFO
+  display "       mkdir $BRICK_DIR, $GLUSTER_MNT and $MAPRED_SCRATCH_DIR..." $LOG_INFO
   display "       append mount entries to /etc/fstab..." $LOG_INFO
   display "       mount $BRICK_DIR..."                   $LOG_INFO
   out=''
   for (( i=0; i<$NUMNODES; i++ )); do
       node="${HOSTS[$i]}"
       ip="${HOST_IPS[$i]}"
+
+      # mkfs.xfs
       out="$(ssh -oStrictHostKeyChecking=no root@$node \
 	"mkfs -t xfs -i size=512 -f $BRICK_DEV 2>&1")"
       (( $? != 0 )) && {
-        display "ERROR: $node: mkfs.xfs: $out" $LOG_FORCE; exit 9; }
+        display "ERROR: $node: mkfs.xfs: $out" $LOG_FORCE; exit 11; }
       display "mkfs.xfs: $out" $LOG_DEBUG
 
-      # volname dir under brick by convention
+      # use volname dir under brick by convention
       out="$(ssh -oStrictHostKeyChecking=no root@$node \
 	"mkdir -p $BRICK_MNT 2>&1")"
       (( $? != 0 )) && {
-        display "ERROR: $node: mkdir $BRICK_MNT: $out" $LOG_FORCE; exit 11; }
+        display "ERROR: $node: mkdir $BRICK_MNT: $out" $LOG_FORCE; exit 12; }
       display "mkdir $BRICK_MNT: $out" $LOG_DEBUG
 
+      # make vol mnt dir
       out="$(ssh -oStrictHostKeyChecking=no root@$node \
-	"mkdir -p $GLUSTER_MNT 2>&1")"
+        "mkdir -p $GLUSTER_MNT 2>&1")"
       (( $? != 0 )) && {
         display "ERROR: $node: mkdir $GLUSTER_MNT: $out" $LOG_FORCE; exit 13; }
       display "mkdir $GLUSTER_MNT: $out" $LOG_DEBUG
@@ -637,11 +684,11 @@ function setup(){
           echo '$BRICK_DEV $BRICK_DIR xfs  $BRICK_MNT_OPTS  0 0' >>/etc/fstab
         fi
         if ! grep -qs $GLUSTER_MNT /etc/fstab ; then
-          echo '$ip:/$VOLNAME  $GLUSTER_MNT  glusterfs  $GLUSTER_MNT_OPTS  0 0'\
-                >>/etc/fstab
+          echo '$node:/$VOLNAME  $GLUSTER_MNT  glusterfs  $GLUSTER_MNT_OPTS \
+		0 0' >>/etc/fstab
         fi")"
       (( $? != 0 )) && {
-        display "ERROR: $node: append fstab: $out" $LOG_FORCE; exit 15; }
+        display "ERROR: $node: append fstab: $out" $LOG_FORCE; exit 14; }
       display "append fstab: $out" $LOG_DEBUG
 
       # Note: mapred scratch dir must be created *after* the brick is
@@ -651,14 +698,14 @@ function setup(){
       out="$(ssh -oStrictHostKeyChecking=no root@$node \
 	"mount $BRICK_DIR 2>&1")" # mount via fstab
       (( $? != 0 )) && {
-        display "ERROR: $node: mount $BRICK_DIR: $out" $LOG_FORCE; exit 17; }
+        display "ERROR: $node: mount $BRICK_DIR: $out" $LOG_FORCE; exit 15; }
       display "append fstab: $out" $LOG_DEBUG
 
       out="$(ssh -oStrictHostKeyChecking=no root@$node \
 	"mkdir -p $MAPRED_SCRATCH_DIR 2>&1")"
       (( $? != 0 )) && {
         display "ERROR: $node: mkdir $MAPRED_SCRATCH_DIR: $out" $LOG_FORCE;
-        exit 19; }
+        exit 17; }
       display "mkdir $MAPRED_SCRATCH_DIR: $out" $LOG_DEBUG
   done
 
@@ -697,7 +744,9 @@ function setup(){
   # Note: ownership and permissions must be set *afer* the gluster vol is
   #       mounted.
   for node in "${HOSTS[@]}"; do
-      display "-- $node --" $LOG_INFO
+      display "-- $node -- mount vol and create $HADOOP_G group" $LOG_INFO
+
+      # mount vol via fstab
       out="$(ssh -oStrictHostKeyChecking=no root@$node \
 		"mount $GLUSTER_MNT 2>&1")" # from fstab
       (( $? != 0 )) && {
@@ -709,21 +758,25 @@ function setup(){
       # create hadoop group, if needed
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
         if ! getent group $HADOOP_G >/dev/null ; then
-          groupadd --gid $HADOOP_GID $HADOOP_G 2>&1 # note: no password
+          groupadd --system $HADOOP_G 2>&1 # note: no password
         fi")"
       (( $? != 0 )) && {
 	display "ERROR: $node: groupadd $HADOOP_G: $out" $LOG_FORCE; exit 23; }
       display "groupadd $HADOOP_G: $out" $LOG_DEBUG
+  done
+
+  # validate consistent hadoop group GID across cluster
+  verify_hadoop_gid "$HADOOP_G"
+
+  for node in "${HOSTS[@]}"; do
+      display "-- $node -- create users" $LOG_INFO
 
       # create the required M/R-YARN users, if needed
       for (( i=0 ; i<${#MR_USERS[@]} ; i++ )) ; do
 	user="${MR_USERS[$i]}"
-        uid="${MR_UIDS[$i]}"
-        # ignore uid if set to 'X'
-	[[ "$uid" == 'X' ]] && uid='' || uid="--uid $uid"
 	out="$(ssh -oStrictHostKeyChecking=no root@$node "
 		if ! getent passwd $user >/dev/null ; then
- 		  useradd --system $uid -g $HADOOP_G $user 2>&1
+ 		  useradd --system -g $HADOOP_G $user 2>&1
 		fi
 	       ")"
 	(( $? != 0 )) && {
@@ -731,6 +784,13 @@ function setup(){
 	  exit 25; }
 	display "useradd $user: $out" $LOG_DEBUG
       done
+  done
+
+  # validate consistent m/r-yarn user IDs across cluster
+  verify_user_uids ${MR_USERS[@]}
+
+  for node in "${HOSTS[@]}"; do
+      display "-- $node -- create hadoop directories" $LOG_INFO
 
       # create all of the M/R-YARN dirs with correct perms and owner
       for (( i=0 ; i<${#MR_DIRS[@]} ; i++ )) ; do
@@ -770,8 +830,9 @@ function setup(){
 #
 function install_nodes(){
 
-  local i; local node=''; local ip=''; local install_mgmt_node
+  local i; local node; local ip; local install_mgmt_node
   local LOCAL_PREP_LOG_DIR='/var/tmp/'; local out
+  local FILES_TO_CP="$PREP_SH functions *sudoers* $SUBDIRS"
   REBOOT_NODES=() # global
 
   # prep_node: sub-function which copies the prep_node script and all sub-
@@ -785,16 +846,16 @@ function install_nodes(){
   #
   function prep_node(){
 
-    local node="$1"; local ip="$2"; local install_storage="$3"
-    local install_mgmt="$4"; local err
-    local FILES_TO_CP="$PREP_SH functions *sudoers* $SUBDIRS"
+    local node="$1"; local ip="$2"
+    local install_storage="$3"; local install_mgmt="$4"
+    local err; local ssh_target
+    [[ $USING_DNS == true ]] && ssh_target=$node || ssh_target=$ip
 
-    # use ip rather than node for scp and ssh until /etc/hosts is set up
-    ssh -oStrictHostKeyChecking=no root@$ip "
+    ssh -oStrictHostKeyChecking=no root@$ssh_target "
 	rm -rf $REMOTE_INSTALL_DIR
 	mkdir -p $REMOTE_INSTALL_DIR"
     display "-- Copying rhs-hadoop install files..." $LOG_INFO
-    out="$(scp -r $FILES_TO_CP root@$ip:$REMOTE_INSTALL_DIR)"
+    out="$(scp -r $FILES_TO_CP root@$ssh_target:$REMOTE_INSTALL_DIR)"
     err=$?
     display "copy install files: $out" $LOG_DEBUG
     if (( err != 0 )) ; then
@@ -813,8 +874,8 @@ function install_nodes(){
 	[INST_STORAGE]="$install_storage" [INST_MGMT]="$install_mgmt" \
 	[MGMT_NODE]="$MGMT_NODE" [VERBOSE]="$VERBOSE" \
 	[PREP_LOG]="$PREP_NODE_LOG_PATH" [REMOTE_DIR]="$REMOTE_INSTALL_DIR" \
-	[RHN_USER]="$RHN_USER" [RHN_PASS]="$RHN_PASS")
-    out="$(ssh -oStrictHostKeyChecking=no root@$ip $REMOTE_PREP_SH \
+	[USING_DNS]=$USING_DNS)
+    out="$(ssh -oStrictHostKeyChecking=no root@$ssh_target $REMOTE_PREP_SH \
         "\"$(declare -p PREP_ARGS)\"" "\"${HOSTS[@]}\"" \ "\"${HOST_IPS[@]}\""
 	)"
     err=$?
@@ -823,7 +884,7 @@ function install_nodes(){
     # messages that honor the verbose setting. We can't call display() next
     # because we don't want to double log, so instead, append the entire
     # PREP_NODE_LOG file to LOGFILE and echo the contents of $out.
-    scp -q root@$ip:$PREP_NODE_LOG_PATH $LOCAL_PREP_LOG_DIR
+    scp -q root@$ssh_target:$PREP_NODE_LOG_PATH $LOCAL_PREP_LOG_DIR
     cat ${LOCAL_PREP_LOG_DIR}$PREP_NODE_LOG >> $LOGFILE
     echo "$out" # prep_node.sh has honored the verbose setting
 
@@ -832,7 +893,7 @@ function install_nodes(){
       if [[ "$ip" == "$INSTALL_FROM_IP" ]] ; then
         DEFERRED_REBOOT_NODE="$node"
       else
-	REBOOT_NODES+=("$ip")
+	REBOOT_NODES+=("$node")
       fi
     elif (( err != 0 )) ; then # fatal error in install.sh so quit now
       display " *** ERROR! prep_node script exited with error: $err ***" \
@@ -853,7 +914,7 @@ function install_nodes(){
       display
 
       # Append to bricks string. Convention to use a subdir under the XFS
-      # brick, and to name this subdir same as volname.
+      # brick, and to name this subdir the same as the volname.
       bricks+=" $node:$BRICK_MNT"
 
       install_mgmt_node=false
@@ -885,7 +946,7 @@ function install_nodes(){
 #
 function reboot_nodes(){
 
-  local ip; local i; local msg
+  local node; local i; local msg
   local num=${#REBOOT_NODES[@]} # number of nodes to reboot
 
   (( num <= 0 )) && return # no nodes to reboot
@@ -894,19 +955,19 @@ function reboot_nodes(){
   msg='node'
   (( num != 1 )) && msg+='s'
   display "-- $num $msg will be rebooted..." $LOG_SUMMARY
-  for ip in "${REBOOT_NODES[@]}"; do
-      display "   * rebooting node: $ip..." $LOG_INFO
-      ssh -oStrictHostKeyChecking=no root@$ip "reboot && exit"
+  for node in "${REBOOT_NODES[@]}"; do
+      display "   * rebooting node: $node..." $LOG_INFO
+      ssh -oStrictHostKeyChecking=no root@$node "reboot && exit"
   done
 
   # makes sure all rebooted nodes are back up before returning
   while true ; do
       for i in "${!REBOOT_NODES[@]}"; do # array of non-null element indices
-	  ip=${REBOOT_NODES[$i]}         # unset leaves sparse array
-	  # if possible to ssh to ip then unset that array entry
-	  ssh -q -oBatchMode=yes -oStrictHostKeyChecking=no root@$ip exit
+	  node=${REBOOT_NODES[$i]}       # unset leaves sparse array
+	  # if possible to ssh to node then unset that array entry
+	  ssh -q -oBatchMode=yes -oStrictHostKeyChecking=no root@$node exit
 	  if (( $? == 0 )) ; then
-	    display "   * node $ip sucessfully rebooted" $LOG_DEBUG
+	    display "   * node $node sucessfully rebooted" $LOG_DEBUG
 	    unset REBOOT_NODES[$i] # null entry in array
 	  fi
       done
@@ -1007,9 +1068,11 @@ echo
 display "-- Performance config..." $LOG_SUMMARY
 perf_config
 
-# reboot nodes where a kernel patch was installed
+# reboot nodes if needed
 reboot_nodes
 
+echo
+display "**** This script can be re-run anytime! ****" $LOG_REPORT
 echo
 display "$(date). End: $SCRIPT" $LOG_REPORT
 echo

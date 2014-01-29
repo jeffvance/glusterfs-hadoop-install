@@ -48,9 +48,10 @@ MGMT_INSTALL="${_ARGS[INST_MGMT]}"       # true or false
 VERBOSE="${_ARGS[VERBOSE]}"  # needed by display()
 LOGFILE="${_ARGS[PREP_LOG]}" # needed by display()
 DEPLOY_DIR="${_ARGS[REMOTE_DIR]}"
+USING_DNS=${_ARGS[USING_DNS]} # true|false
 HOSTS=($2)
 HOST_IPS=($3)
-#echo -e "*** $(basename $0) 1=$1\n1=$(declare -p _ARGS),\n2=${HOSTS[@]},\n3=${HOST_IPS[@]}"
+echo -e "*** $(basename $0) 1=$1\n1=$(declare -p _ARGS),\n2=${HOSTS[@]},\n3=${HOST_IPS[@]}"
 
 NUMNODES=${#HOSTS[@]}
 
@@ -211,11 +212,15 @@ function install_common(){
   display "-- Disable firewall" $LOG_SUMMARY
   disable_firewall
 
-  echo
-  display "-- Setting up IP -> hostname mapping" $LOG_SUMMARY
-  fixup_etc_hosts_file
-  echo $NODE >/etc/hostname
-  hostname $NODE
+  # potentially append local hosts file entries to /etc/hosts, if not using dns
+  if [[ $USING_DNS == false ]] ; then # ok to update /etc/hosts
+    echo
+    display "-- Setting up IP -> hostname mapping" $LOG_SUMMARY
+    fixup_etc_hosts_file
+  fi
+
+  # set hostname, if not set
+  [[ -z "$(hostname)" ]] && hostname $NODE
 
   # set up sudoers file for mapred and yarn users
   sudoers
@@ -231,13 +236,7 @@ function install_common(){
 #
 function install_storage(){
 
-  local i; local out
-
-  # set this node's IP variable
-  for (( i=0; i<$NUMNODES; i++ )); do
-	[[ $NODE == ${HOSTS[$i]} ]] && break
-  done
-  IP=${HOST_IPS[$i]}
+  local out
 
   # set up /etc/hosts to map ip -> hostname
   # install Gluster-Hadoop plug-in on agent nodes

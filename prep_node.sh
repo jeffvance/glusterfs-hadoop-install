@@ -104,8 +104,40 @@ function install_plugin(){
   display "   ... Gluster-Hadoop plug-in install successful" $LOG_SUMMARY
   cd -
 }
+ 
+# validate_ntp_conf: validate the ntp config file by ensuring there is at least
+# one time-server suitable for ntp use.
+#
+function validate_ntp_conf(){
 
-# verify_ntp: verify that ntp is installed, running, and synchronized.
+  local timeserver; local i=1
+  local NTP_CONF='/etc/ntp.conf'
+  local servers=(); local numServers
+
+  servers=($(grep "^ *server " $NTP_CONF|awk '{print $2}')) # time-servers 
+  numServers=${#servers[@]}
+
+  if (( numServers == 0 )) ; then
+    display "ERROR: no server entries in $NTP_CONF" $LOG_FORCE
+    exit 9
+  fi
+
+  for timeserver in "${servers[@]}" ; do
+      ntpdate -q $timeserver >& /dev/null
+      (( $? == 0 )) && break # exit loop, found valid time-server
+      ((i+=1))
+  done
+
+  if (( i > numServers )) ; then
+    display "ERROR: no suitable time-servers found in $NTP_CONF" $LOG_FORCE
+    exit 11
+  fi
+
+  display "   NTP time-server $timeserver is acceptable" $LOG_INFO
+}
+
+# verify_ntp: verify that ntp is running and the config file has 1 or more
+# suitable server records.
 #
 function verify_ntp(){
 
@@ -116,6 +148,8 @@ function verify_ntp(){
   err=$?
   display "chkconfig ntpd on: $out" $LOG_DEBUG
   (( err != 0 )) &&  display "WARN: chkconfig ntpd on error $err" $LOG_FORCE
+
+  validate_ntp_conf # exits if error found
 
   # stop ntpd so that ntpd -qg can potentially do a large time change
   ps -C ntpd >& /dev/null
@@ -140,10 +174,6 @@ function verify_ntp(){
   err=$?
   display "ntpd start: $out" $LOG_DEBUG
   (( err != 0 )) && display "WARN: ntpd start error $err" $LOG_FORCE
-
-  # used to invoke ntpstat to verify the synchronization state, but error 1 was
-  # always returned if the above ntpd -qg cmd did a large time change. Thus, we
-  # no longer call ntpstat since the node will "realtively" soon sync up.
 }
 
 # sudoers: copy the packaged sudoers file to /etc/sudoers.d/ and set its

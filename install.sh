@@ -25,7 +25,7 @@
 
 # set global variables
 SCRIPT=$(basename $0)
-INSTALL_VER='0.61'   # self version
+INSTALL_VER='0.62'   # self version
 INSTALL_DIR=$PWD     # name of deployment (install-from) dir
 INSTALL_FROM_IP=($(hostname -I))
 INSTALL_FROM_IP=${INSTALL_FROM_IP[$(( ${#INSTALL_FROM_IP[@]}-1 ))]} # last ntry

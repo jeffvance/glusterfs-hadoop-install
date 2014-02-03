@@ -11,15 +11,8 @@ perform non-RHS, glusterfs-specific volume preparations that are not part of
 the common installation process.
 
 Currently, glusterfs-specific preparations include:
-  - getting the current glusterfs-hadoop plugin (JAR file),
+  - getting the glusterfs-hadoop plugin (JAR file),
   - installing xfs if needed,
   - installing openJDK Java if needed
   - installing and starting gluster.
-
-As long as glusterfs/ is the only directory found in the parent directory (../)
-running the installation script is simple:
-  - cd to the parent directory (../),
-  - ./install.sh --help  # to learn about the various options,
-  - ./install.sh <brick-device>
-  - examine log file in /var/log/glusterfs-hadoop-install.log
 

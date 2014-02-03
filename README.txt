@@ -5,34 +5,26 @@
   This top-level directory contains files and scripts common to both Red Hat  
   Storage (RHS) and to non-RHS targets for the preparation of gluster volumes
   for Hadoop workloads. If the target is fedora or other non-Red Hat Storage
-  (RHS) platorm then files under the "glusterfs/" directory are used. If the
+  (RHS) platorms then files under the "glusterfs/" directory are used. If the
   target platform is RHS then there's more work to do, but the first step is
-  to clone the rhs-hadoop-install repo and read its README file(s). Read the
-  RHS README files for more information on creating RHS specific tarballs and
-  preparting rhs for Hadoop jobs. 
+  to clone the rhs-hadoop-install repo and to read its README files.
 
-  As long as glusterfs/ is the only sub-directory the installation script is
-  simple to execute:
+  The installation script is simple to execute:
   - ./install.sh --help  # to learn about the various options,
   - ./install.sh <brick-device>
   - examine the log file in /var/log/glusterfs-hadoop-install.log
 
-  If there is more than one sub-directory in the git repo then a tarball must
-  be created prior to executing install.sh. The tarball needs to contain all of
-  the common files and the sub-directories for the target installation. After
-  creating the tarball, extract it to a empty directory and run ./install.sh.
-
   Each sub-directory may contain a script named "pre_install.sh" and/or a script
   named "post_install.sh". These are the only scripts within a sub-directory
-  that are automatically executed by the common install.sh script. As expected,
-  "pre_install.sh" is invoked as the first step of the common "prep_node.sh" 
-  script, and "post_install.sh" is invoked as the last step of prep_node.sh.
-  Note: the common prep_node.sh script is automatically invoked by the common
-  install.sh script, once per node.
+  that are automatically executed by the install.sh script. As expected,
+  "pre_install.sh" is invoked as the first step of the prep_node.sh script, and
+  "post_install.sh" is invoked as the last step of prep_node.sh. Note: the
+  prep_node.sh script is automatically invoked by install.sh script, once per
+  node.
 
   Sub-directory *_install.sh scripts may execute additional programs and/or
-  scripts, but the common install.sh script only executes one "pre_install" and
-  one "post_install" script per sub-directory. Note: sub-directory *_install.sh
+  scripts, but install.sh script only executes one "pre_install" and one
+  "post_install" script per sub-directory. Note: sub-directory *_install.sh
   scripts are optional and if not present no sub-directory scripts are executed,
   even if other executable scripts are present in the sub-directory. If there 
   are multiple sub-directories in the package, each with pre_|post_ install.sh

@@ -438,7 +438,8 @@ function verify_vol_created(){
   if (( i < LIMIT )) ; then 
     display "   Volume \"$VOLNAME\" created..." $LOG_DEBUG
   else
-    display "   ERROR: Volume \"$VOLNAME\" creation failed..." $LOG_FORCE
+    display "   ERROR: Volume \"$VOLNAME\" creation failed" $LOG_FORCE
+    display "          Bricks=\"$bricks\"" $LOG_FORCE
     exit 8
   fi
 }

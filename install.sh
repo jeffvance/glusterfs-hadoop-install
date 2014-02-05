@@ -423,9 +423,11 @@ function verify_pool_created(){
 # verify_vol_created: there are timing windows when using ssh and the gluster
 # cli. This function returns once it has confirmed that $VOLNAME has been
 # create, or a pre-defined number of attempts have been made.
+# $1=status return from gluster vol create command.
 #
 function verify_vol_created(){
 
+  local volCreateErr=$1
   local i=0; local LIMIT=$((NUMNODES * 2))
 
   while (( i < LIMIT )) ; do # don't loop forever
@@ -439,7 +441,7 @@ function verify_vol_created(){
   if (( i < LIMIT )) ; then 
     display "   Volume \"$VOLNAME\" created..." $LOG_DEBUG
   else
-    display "   ERROR: Volume \"$VOLNAME\" creation failed" $LOG_FORCE
+    display "   ERROR: Volume \"$VOLNAME\" creation failed with error $volCreateErr" $LOG_FORCE
     display "          Bricks=\"$bricks\"" $LOG_FORCE
     exit 8
   fi
@@ -449,9 +451,11 @@ function verify_vol_created(){
 # cli. This function returns once it has confirmed that $VOLNAME has been
 # started, or a pre-defined number of attempts have been made. A volume is
 # considered started once all bricks are online.
+# $1=status return from gluster vol start command.
 #
 function verify_vol_started(){
 
+  local volStartErr=$1
   local i=0; local rtn; local LIMIT=$((NUMNODES * 2))
   local FILTER='^Online' # grep filter
   local ONLINE=': Y'     # grep not-match value
@@ -472,7 +476,7 @@ function verify_vol_started(){
   if (( i < LIMIT )) ; then 
     display "   Volume \"$VOLNAME\" started..." $LOG_DEBUG
   else
-    display "   ERROR: Volume \"$VOLNAME\" NOT started...\nTry gluster volume status $VOLNAME" $LOG_FORCE
+    display "   ERROR: Volume \"$VOLNAME\" start failed with error $volStartErr" $LOG_FORCE
     exit 9
   fi
 }
@@ -621,7 +625,7 @@ function create_trusted_pool(){
 #
 function setup(){
 
-  local i=0; local node=''; local ip; local out
+  local i=0; local node=''; local ip; local out; local err
   local BRICK_MNT_OPTS="noatime,inode64"
   local GLUSTER_MNT_OPTS="entry-timeout=0,attribute-timeout=0,use-readdirp=no,acl,_netdev"
   local dir; local perm; local owner
@@ -722,14 +726,16 @@ function setup(){
   # create vol
   out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
 	gluster volume create $VOLNAME replica $REPLICA_CNT $bricks 2>&1")"
+  err=$?
   display "vol create: $out" $LOG_DEBUG
-  verify_vol_created
+  verify_vol_created $err
 
   # start vol
   out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
 	gluster --mode=script volume start $VOLNAME 2>&1")"
+  err=$?
   display "vol start: $out" $LOG_DEBUG
-  verify_vol_started
+  verify_vol_started $err
 
   # 9) mount vol on every node
   # 10) create distributed mapred/system and mr-history/done dirs on each node

@@ -832,7 +832,7 @@ function install_nodes(){
 
   local i; local node; local ip; local install_mgmt_node
   local LOCAL_PREP_LOG_DIR='/var/tmp/'; local out
-  local FILES_TO_CP="$PREP_SH functions *sudoers* $SUBDIRS"
+  local FILES_TO_CP="$PREP_SH functions $SUBDIRS"
   REBOOT_NODES=() # global
 
   # prep_node: sub-function which copies the prep_node script and all sub-

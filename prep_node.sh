@@ -12,7 +12,6 @@
 #
 # This script does the following on each host node:
 #  - modifes /etc/hosts to include all hosts ip/hostname for the cluster,
-#  - sets up the sudoers file,
 #  - ensures that ntp is running correctly,
 #  - disables the firewall,
 #  - install the gluster-hadoop plugin, if present in any of the subdirectories
@@ -179,6 +178,7 @@ function verify_ntp(){
 # sudoers: copy the packaged sudoers file to /etc/sudoers.d/ and set its
 # permissions. Note: it is ok if the sudoers file is not included in the
 # install package.
+# NOTE: this function is no longer invoked and should be removed at some point.
 #
 function sudoers(){
 
@@ -253,7 +253,8 @@ function install_common(){
   [[ -z "$(hostname)" ]] && hostname $NODE
 
   # set up sudoers file for mapred and yarn users
-  sudoers
+  # Note: sudoers is handled in the rhs-hadoop (plugin) pgk now...
+  #sudoers
 
   # verify NTP setup and sync clock
   echo

@@ -25,7 +25,7 @@
 
 # set global variables
 SCRIPT=$(basename $0)
-INSTALL_VER='0.62'   # self version
+INSTALL_VER='0.63'   # self version
 INSTALL_DIR=$PWD     # name of deployment (install-from) dir
 INSTALL_FROM_IP=($(hostname -I))
 INSTALL_FROM_IP=${INSTALL_FROM_IP[$(( ${#INSTALL_FROM_IP[@]}-1 ))]} # last ntry
@@ -375,7 +375,7 @@ function verify_user_uids(){
 #
 function verify_peer_detach(){
 
-  local out; local i=0; local LIMIT=$((NUMNODES * 5))
+  local out; local i=0; local LIMIT=$((NUMNODES * 2))
 
   while (( i < LIMIT )) ; do # don't loop forever
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode \
@@ -401,12 +401,13 @@ function verify_peer_detach(){
 function verify_pool_created(){
 
   local DESIRED_STATE="Peer in Cluster (Connected)"
-  local out; local i=0; local LIMIT=$((NUMNODES * 5))
+  local out; local i=0; local LIMIT=$((NUMNODES * 2))
 
   while (( i < LIMIT )) ; do # don't loop forever
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode \
-	"gluster peer status|tail -n 1")" # "State:"
-      [[ -n "$out" && "${out#* }" == "$DESIRED_STATE" ]] && break
+	gluster peer status|grep 'State: '|grep -v "$DESIRED_STATE")"
+      # out contains lines where the state != desired state, == problem
+      [[ -z "$out" ]] && break
       sleep 2
      ((i++))
   done
@@ -425,7 +426,7 @@ function verify_pool_created(){
 #
 function verify_vol_created(){
 
-  local i=0; local LIMIT=$((NUMNODES * 5))
+  local i=0; local LIMIT=$((NUMNODES * 2))
 
   while (( i < LIMIT )) ; do # don't loop forever
       ssh -oStrictHostKeyChecking=no root@$firstNode \
@@ -451,7 +452,7 @@ function verify_vol_created(){
 #
 function verify_vol_started(){
 
-  local i=0; local rtn; local LIMIT=$((NUMNODES * 5))
+  local i=0; local rtn; local LIMIT=$((NUMNODES * 2))
   local FILTER='^Online' # grep filter
   local ONLINE=': Y'     # grep not-match value
 

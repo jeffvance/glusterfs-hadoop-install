@@ -14,8 +14,8 @@
 #  - modifes /etc/hosts to include all hosts ip/hostname for the cluster,
 #  - ensures that ntp is running correctly,
 #  - disables the firewall,
-#  - install the gluster-hadoop plugin, if present in any of the subdirectories
-#    from which install.sh is run.
+#  - installs the gluster-hadoop plugin, if present in any of the sub-
+#    directories from which install.sh is run.
 #
 # Lastly, if there are specific shell scripts within any sub-directories found
 # under the deployment dir, they are executed and passed the same args as
@@ -58,8 +58,10 @@ NUMNODES=${#HOSTS[@]}
 source ${DEPLOY_DIR}functions
 
 
-# install_plugin: copy the glusterfs-hadoop plugin from a deploy directory to
-# the appropriate directory and create a symlink in the hadoop directory.
+# install_plugin: if a plugin jar is found in any of the sub-directories under
+# the deploy-from dir, then copy the glusterfs-hadoop plugin from a deploy dir
+# to the appropriate location and create a symlink in the hadoop directory. If
+# no plugin jar is included then simply return since this is not a problem.
 #
 function install_plugin(){
 
@@ -70,14 +72,15 @@ function install_plugin(){
 
   # set MATCH_DIR and MATCH_FILE vars if match
   match_dir "$PLUGIN_JAR" "$SUBDIR_FILES"
-  [[ -z "$MATCH_DIR" ]] && {
-	display "INFO: gluster-hadoop plugin not supplied" $LOG_INFO;
-	return; }
+  [[ -z "$MATCH_DIR" ]] && return # nothing to do, which is fine...
 
+  # found plugin jar
   cd $MATCH_DIR
   jar="$MATCH_FILE"
 
-  display "-- Installing Gluster-Hadoop plug-in ($jar)..." $LOG_INFO
+  echo
+  display "-- Installing glusterfs-hadoop plugin ($jar)..." $LOG_INFO
+
   # create target dirs if they does not exist
   [[ -d $USR_JAVA_DIR ]]    || mkdir -p $USR_JAVA_DIR
   [[ -d $HADOOP_JAVA_DIR ]] || mkdir -p $HADOOP_JAVA_DIR
@@ -269,10 +272,7 @@ function install_storage(){
 
   local out
 
-  # set up /etc/hosts to map ip -> hostname
-  # install Gluster-Hadoop plug-in on agent nodes
-  echo
-  display "-- Verifying GlusterFS installation:" $LOG_SUMMARY
+  # install glusterfs-hadoop plugin on agent nodes
   install_plugin
 }
 

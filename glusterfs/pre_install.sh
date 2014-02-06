@@ -47,6 +47,8 @@ source ${DEPLOY_DIR}functions
 # get_plugin: wget the most recent gluster-hadoop plug-in from s3 and copy it
 # to PWD. This is done by wget'ng the metadata file and extracting the latest
 # version string, then wget'ng this version of the jar file.
+# NOTE: no longer being used since user may have an earlier (or different)
+#   version of the plugin and doesn't want the script to override it.
 #
 function get_plugin(){
 
@@ -184,9 +186,10 @@ function install_storage(){
   display "-- Start glusterd" $LOG_SUMMARY
   start_glusterd
 
-  echo
-  display "-- Get glusterfs-hadoop plugin" $LOG_SUMMARY
-  get_plugin
+  # NOTE: no longer invoked.
+  #echo
+  #display "-- Get glusterfs-hadoop plugin" $LOG_SUMMARY
+  #get_plugin
 }
 
 # install_mgmt: perform the installations steps needed when the node is the

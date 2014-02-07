@@ -254,7 +254,7 @@ function report_deploy_values(){
 	display "GlusterFS:            $vers (same on all nodes)" $LOG_REPORT
       ;;
       *) 
-	display "WARNING! There are ${#uniq_vers[@]} versions of gluster in this cluster" $LOG_REPORT
+	display "WARNING! There are ${#uniq_vers[*]} versions of gluster in this cluster" $LOG_REPORT
 	for (( i=0; i<$NUMNODES; i++ )); do
 	    node="${HOSTS[$i]}"
 	    vers="${node_vers[$i]}"
@@ -336,7 +336,7 @@ function verify_hadoop_gid(){
 
   uniq_gids=($(printf '%s\n' "${gids[@]}" | sort -u))
   if (( ${#uniq_gids[@]} > 1 )) ; then
-    display "ERROR: \"$grp\" group has inconsistent GIDs across the cluster. $grp GIDs: ${uniq_gids[@]}" $LOG_FORCE
+    display "ERROR: \"$grp\" group has inconsistent GIDs across the cluster. $grp GIDs: ${uniq_gids[*]}" $LOG_FORCE
     exit 3
   fi
 }
@@ -363,7 +363,7 @@ function verify_user_uids(){
 
      uniq_uids=($(printf '%s\n' "${uids[@]}" | sort -u))
      if (( ${#uniq_uids[@]} > 1 )) ; then
-       display "ERROR: \"$user\" user has inconsistent UIDs across cluster. $user UIDs: ${uniq_uids[@]}" $LOG_FORCE
+       display "ERROR: \"$user\" user has inconsistent UIDs across cluster. $user UIDs: ${uniq_uids[*]}" $LOG_FORCE
        exit 5
      fi
   done
@@ -780,8 +780,7 @@ function setup(){
       display "-- $node -- create users" $LOG_INFO
 
       # create the required M/R-YARN users, if needed
-      for (( i=0 ; i<${#MR_USERS[@]} ; i++ )) ; do
-	user="${MR_USERS[$i]}"
+      for user in "${MR_USERS[@]}" ; do
 	out="$(ssh -oStrictHostKeyChecking=no root@$node "
 		if ! getent passwd $user >/dev/null ; then
  		  useradd --system -g $HADOOP_G $user 2>&1

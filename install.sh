@@ -630,10 +630,12 @@ function setup(){
   local GLUSTER_MNT_OPTS="entry-timeout=0,attribute-timeout=0,use-readdirp=no,acl,_netdev"
   local dir; local perm; local owner
   local user; local uid
+  # note: all users/owners belong to the hadoop group for now
   local HADOOP_G='hadoop'
   local MAPRED_U='mapred'
+  local HBASE_U='hbase'
   local YARN_U='yarn'; local YARN_UID=502
-  local MR_USERS=("$MAPRED_U" "$YARN_U")
+  local MR_USERS=("$MAPRED_U" "$YARN_U" "$HBASE_U")
   local YARN_NM_REMOTE_APP_LOG_DIR='tmp/logs'
   local MR_JOB_HIST_INTERMEDIATE_DONE='mr-history/tmp'
   local MR_JOB_HIST_DONE='mr-history/done'
@@ -642,9 +644,9 @@ function setup(){
   # the next 3 arrays are all paired
   # note: if a dirname is relative (doesn't start with '/') then the gluster
   #  mount is prepended to it
-  local MR_DIRS=("$GLUSTER_MNT" 'mapred' 'mapred/system' 'tmp' 'user' 'mr-history' "$YARN_NM_REMOTE_APP_LOG_DIR" "$MR_JOB_HIST_INTERMEDIATE_DONE" "$MR_JOB_HIST_DONE" "$YARN_STAGE" "$MR_JOB_HIST_APPS_LOGS")
-  local MR_PERMS=(0775 0770 0755 1777 0775 0755 1777 1777 0750 0770 1777)
-  local MR_OWNERS=("$YARN_U" "$MAPRED_U" "$MAPRED_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U")
+  local MR_DIRS=("$GLUSTER_MNT" 'mapred' 'mapred/system' 'tmp' 'user' 'mr-history' "$YARN_NM_REMOTE_APP_LOG_DIR" "$MR_JOB_HIST_INTERMEDIATE_DONE" "$MR_JOB_HIST_DONE" "$YARN_STAGE" "$MR_JOB_HIST_APPS_LOGS" 'hbase')
+  local MR_PERMS=(0775 0770 0755 1777 0775 0755 1777 1777 0750 0770 1777 0770)
+  local MR_OWNERS=("$YARN_U" "$MAPRED_U" "$MAPRED_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$HBASE_U")
 
   # 1) mkfs.xfs brick_dev on every node
   # 2) mkdir brick_dir and vol_mnt on every node

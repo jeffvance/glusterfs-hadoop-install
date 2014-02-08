@@ -10,10 +10,8 @@
 # to both fedora and Red Hat Storage (RHS) are done here and in the companion
 # prep_node.sh script, which is executed once per node. prep_node.sh will
 # automatically execute pre_install.sh and post_install.sh scripts in all
-# directories listed in the --dirs option, with the default being to execute
-# only scripts in the glusterfs/ directory, if present. Also, all files
-# contained in directories listed in the --dirs option are copied to each host
-# defined in the local "hosts" file.
+# directories the deploy-from dir. Also, all files in sub-directories under the
+# deploy-from dir are copied to each host defined in the local "hosts" file.
 #
 # Assumptions:
 #  - passwordless SSH is setup between the installation node and each storage
@@ -115,7 +113,6 @@ EOF
   -h|--help          : help text (this).
 
 EOF
-  
 }
 
 # parse_cmd: getopt is used to do general parsing. The brick-dev arg is

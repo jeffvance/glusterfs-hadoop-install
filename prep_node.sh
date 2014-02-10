@@ -7,11 +7,12 @@
 # THIS SCRIPT IS NOT MEANT TO BE RUN STAND-ALONE.
 #
 # This script is a companion script to install.sh and runs on a remote node. It
-# prepares the hosting node for hadoop workloads ontop of red hat storage, aka
-# glusterfs. 
+# prepares the hosting node for hadoop workloads ontop of glusterfs. 
 #
 # This script does the following on each host node:
-#  - modifes /etc/hosts to include all hosts ip/hostname for the cluster,
+#  - (optionally) modifes /etc/hosts to include all hosts ip/hostname for the 
+#    cluster. This assumes ip addresses appear in the local deploy "hosts" file,
+#    otherwise, dns is assumed and /etc/hosts is not modified.
 #  - ensures that ntp is running correctly,
 #  - disables the firewall,
 #  - installs the gluster-hadoop plugin, if present in any of the sub-
@@ -178,44 +179,6 @@ function verify_ntp(){
   (( err != 0 )) && display "WARN: ntpd start error $err" $LOG_FORCE
 }
 
-# sudoers: copy the packaged sudoers file to /etc/sudoers.d/ and set its
-# permissions. Note: it is ok if the sudoers file is not included in the
-# install package.
-# NOTE: this function is no longer invoked and should be removed at some point.
-#
-function sudoers(){
-
-  local SUDOER_DIR='/etc/sudoers.d'
-  local SUDOER_GLOB='*sudoer*'
-  local sudoer_file="$(ls $SUDOER_GLOB 2>/dev/null)" # except 0 or 1 only!
-  local SUDOER_PATH="$SUDOER_DIR/$sudoer_file"
-  local SUDOER_PERM='440'
-  local out; local err
-
-  echo
-  display "-- Installing sudoers file..." $LOG_SUMMARY
-
-  [[ -z "$sudoer_file" ]] && {
-	display "INFO: sudoers file not supplied in package" $LOG_INFO;
-	return; }
-
-  [[ -d "$SUDOER_DIR" ]] || {
-    display "   Creating $SUDOER_DIR..." $LOG_DEBUG;
-    mkdir -p $SUDOER_DIR; }
-
-  # copy packaged sudoers file to correct location
-  cp $sudoer_file $SUDOER_PATH
-  if [[ ! -f $SUDOER_PATH ]] ; then
-    display "ERROR: sudoers copy to $SUDOER_PATH failed" $LOG_FORCE
-    exit 20
-  fi
-
-  out="$(chmod $SUDOER_PERM $SUDOER_PATH 2>&1)"
-  err=$?
-  display "sudoer chmod: $out" $LOG_DEBUG
-  (( err != 0 )) && display "WARN: sudoers chmod error $err" $LOG_FORCE
-}
-
 # disable_firewall: turn off iptables and make the change permanent on reboot.
 #
 function disable_firewall(){
@@ -234,9 +197,9 @@ function disable_firewall(){
   display "chkconfig off: $out" $LOG_DEBUG
 }
 
-# install_common: perform node installation steps independent of whether or not
-# the node is to be the management server or a storage/data node. Note: a node
-# can be both.
+# install_common: perform common installation steps for all nodes, regardless
+# of whether the node is to be a management server or a storage/data node.
+# Note: a node can be both.
 #
 function install_common(){
 

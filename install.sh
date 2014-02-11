@@ -372,14 +372,15 @@ function verify_user_uids(){
 #
 function verify_peer_detach(){
 
-  local out; local i=0; local LIMIT=$((NUMNODES * 2))
+  local out; local i=0; local SLEEP=2; local LIMIT=$((NUMNODES * 2))
 
   while (( i < LIMIT )) ; do # don't loop forever
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode \
 	"gluster peer status")" # "Number of Peers: x"
       [[ $? == 0 && -n "$out" && ${out##*: } == 0 ]] && break
-      sleep 2
-     ((i++))
+      sleep $SLEEP 
+      ((i++))
+      display "...verify peer detatch wait: $((i*SLEEP)) seconds" $LOG_DEBUG
   done
 
   if (( i < LIMIT )) ; then 
@@ -398,15 +399,16 @@ function verify_peer_detach(){
 function verify_pool_created(){
 
   local DESIRED_STATE="Peer in Cluster (Connected)"
-  local out; local i=0; local LIMIT=$((NUMNODES * 2))
+  local out; local i=0; local SLEEP=2; local LIMIT=$((NUMNODES * 2))
 
   while (( i < LIMIT )) ; do # don't loop forever
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode \
 	gluster peer status|grep 'State: '|grep -v "$DESIRED_STATE")"
       # out contains lines where the state != desired state, == problem
       [[ -z "$out" ]] && break
-      sleep 2
-     ((i++))
+      sleep $SLEEP 
+      ((i++))
+      display "...verify pool create wait: $((i*SLEEP)) seconds" $LOG_DEBUG
   done
 
   if (( i < LIMIT )) ; then 
@@ -419,20 +421,21 @@ function verify_pool_created(){
 
 # verify_vol_created: there are timing windows when using ssh and the gluster
 # cli. This function returns once it has confirmed that $VOLNAME has been
-# create, or a pre-defined number of attempts have been made.
-# $1=status return from gluster vol create command.
+# created, or a pre-defined number of attempts have been made.
+# $1=exit return from gluster vol create command.
 #
 function verify_vol_created(){
 
   local volCreateErr=$1
-  local i=0; local LIMIT=$((NUMNODES * 2))
+  local i=0; local SLEEP=2; local LIMIT=$((NUMNODES * 2))
 
   while (( i < LIMIT )) ; do # don't loop forever
       ssh -oStrictHostKeyChecking=no root@$firstNode \
 	"gluster volume info $VOLNAME >& /dev/null"
       (( $? == 0 )) && break
-      sleep 2
+      sleep $SLEEP
       ((i++))
+      display "...verify vol create wait: $((i*SLEEP)) seconds" $LOG_DEBUG
   done
 
   if (( i < LIMIT )) ; then 
@@ -448,12 +451,12 @@ function verify_vol_created(){
 # cli. This function returns once it has confirmed that $VOLNAME has been
 # started, or a pre-defined number of attempts have been made. A volume is
 # considered started once all bricks are online.
-# $1=status return from gluster vol start command.
+# $1=exit return from gluster vol start command.
 #
 function verify_vol_started(){
 
   local volStartErr=$1
-  local i=0; local rtn; local LIMIT=$((NUMNODES * 2))
+  local i=0; local rtn; local SLEEP=2; local LIMIT=$((NUMNODES * 2))
   local FILTER='^Online' # grep filter
   local ONLINE=': Y'     # grep not-match value
 
@@ -466,8 +469,9 @@ function verify_vol_started(){
 		wc -l
 	")"
       (( rtn == 0 )) && break # exit loop
-      sleep 2
+      sleep $SLEEP
       ((i++))
+      display "...verify vol start wait: $((i*SLEEP)) seconds" $LOG_DEBUG
   done
 
   if (( i < LIMIT )) ; then 
@@ -500,9 +504,10 @@ function verify_gluster_mnt(){
 # 2) stop vol if started **
 # 3) delete vol if created **
 # 4) detach nodes if trusted pool created
-# 5) rm vol_mnt
-# 6) unmount brick_mnt if xfs mounted
-# 7) rm brick_mnt; rm mapred scratch dir
+# 5) kill gluster processes and delete gluster log files
+# 6) rm vol_mnt
+# 7) unmount brick_mnt if xfs mounted
+# 8) rm brick_mnt; rm mapred scratch dir
 # ** gluster cmd only done once for entire pool; all other cmds executed on
 #    each node
 #
@@ -539,6 +544,7 @@ function cleanup(){
 
   # 4) detach nodes if trusted pool created, on all but first node
   # note: peer probe hostname cannot be self node
+  display "       detach all nodes..."   $LOG_INFO
   out="$(ssh -oStrictHostKeyChecking=no root@$firstNode \
 	"gluster peer status|head -n 1")"
   # detach nodes if a pool has been already been formed
@@ -555,9 +561,15 @@ function cleanup(){
     verify_peer_detach
   fi
 
-  # 5) rm vol_mnt on every node
-  # 6) unmount brick_mnt on every node, if xfs mounted
-  # 7) rm brick_mnt and mapred scratch dir on every node
+  # 5) kill gluster processes and delete gluster log files
+  display "       kill gluster processes..."   $LOG_INFO
+  display "       rm gluster log files..."     $LOG_INFO
+  killall glusterd glusterfs glusterfsd # no error handling yet...
+  rm -rf /var/log/glusterfs/*
+
+  # 6) rm vol_mnt on every node
+  # 7) unmount brick_mnt on every node, if xfs mounted
+  # 8) rm brick_mnt and mapred scratch dir on every node
   display "  -- on all nodes:"          $LOG_INFO
   display "       rm $GLUSTER_MNT..."   $LOG_INFO
   display "       umount $BRICK_DIR..." $LOG_INFO

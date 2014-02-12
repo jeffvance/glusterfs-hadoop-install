@@ -427,7 +427,7 @@ function verify_pool_created(){
 function verify_vol_created(){
 
   local volCreateErr=$1
-  local i=0; local SLEEP=2; local LIMIT=$((NUMNODES * 2))
+  local i=0; local SLEEP=2; local LIMIT=$((NUMNODES * 5))
 
   while (( i < LIMIT )) ; do # don't loop forever
       ssh -oStrictHostKeyChecking=no root@$firstNode \
@@ -562,8 +562,8 @@ function cleanup(){
   fi
 
   # 5) kill gluster processes and delete gluster log files
-  display "       kill gluster processes..."   $LOG_INFO
-  display "       rm gluster log files..."     $LOG_INFO
+  display "Kill gluster processes..."   $LOG_INFO
+  display "Delete gluster log files..." $LOG_INFO
   killall glusterd glusterfs glusterfsd # no error handling yet...
   rm -rf /var/log/glusterfs/*
 

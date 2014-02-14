@@ -23,7 +23,7 @@
 
 # set global variables
 SCRIPT=$(basename $0)
-INSTALL_VER='0.66'   # self version
+INSTALL_VER='0.67'   # self version
 INSTALL_DIR=$PWD     # name of deployment (install-from) dir
 INSTALL_FROM_IP=($(hostname -I))
 INSTALL_FROM_IP=${INSTALL_FROM_IP[$(( ${#INSTALL_FROM_IP[@]}-1 ))]} # last ntry
@@ -402,10 +402,14 @@ function verify_pool_created(){
   local out; local i=0; local SLEEP=2; local LIMIT=$((NUMNODES * 2))
 
   while (( i < LIMIT )) ; do # don't loop forever
-      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode \
-	gluster peer status|grep 'State: '|grep -v "$DESIRED_STATE")"
       # out contains lines where the state != desired state, == problem
-      [[ -z "$out" ]] && break
+      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode \
+	gluster peer status)"
+      if (( $? == 0 )) ; then # probe worked
+	if ! grep 'State: ' <<<$out|grep -v "$DESIRED_STATE" >&/dev/null; then
+	  break # all nodes are connected, so done
+        fi
+      fi
       sleep $SLEEP 
       ((i++))
       display "...verify pool create wait: $((i*SLEEP)) seconds" $LOG_DEBUG
@@ -515,6 +519,9 @@ function cleanup(){
 
   local node=''; local out
 
+  # 0) start glusterd service in case it's been stopped. Needed for detach
+  service glusterd start >& /dev/null
+
   # 1) umount vol on every node, if mounted
   display "  -- un-mounting $GLUSTER_MNT on all nodes..." $LOG_INFO
   for node in "${HOSTS[@]}"; do
@@ -564,7 +571,7 @@ function cleanup(){
   # 5) kill gluster processes and delete gluster log files
   display "Kill gluster processes..."   $LOG_INFO
   display "Delete gluster log files..." $LOG_INFO
-  killall glusterd glusterfs glusterfsd # no error handling yet...
+  killall glusterd glusterfs glusterfsd 2>/dev/null # no error handling yet...
   rm -rf /var/log/glusterfs/*
 
   # 6) rm vol_mnt on every node
@@ -657,11 +664,19 @@ function setup(){
   local MR_PERMS=(0775 0770 0755 1777 0775 0755 1777 1777 0750 0770 1777 0770)
   local MR_OWNERS=("$YARN_U" "$MAPRED_U" "$MAPRED_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$HBASE_U")
 
+  # 0) start glusterd service
   # 1) mkfs.xfs brick_dev on every node
   # 2) mkdir brick_dir and vol_mnt on every node
   # 3) append brick_dir and gluster mount entries to fstab on every node
   # 4) mount brick on every node
   # 5) mkdir mapredlocal scratch dir on every node (done after brick mount)
+  out="$(ssh -oStrictHostKeyChecking=no root@$firstNode service glusterd start)"
+  err=$?
+  if (( err != 0 )) ; then
+    display "ERROR $err: cannot start glusterd: $out" $LOG_FORCE
+    exit 11
+  fi
+
   display "  -- on all nodes:"                           $LOG_INFO
   display "       mkfs.xfs $BRICK_DEV..."                $LOG_INFO
   display "       mkdir $BRICK_DIR, $GLUSTER_MNT and $MAPRED_SCRATCH_DIR..." $LOG_INFO
@@ -676,21 +691,21 @@ function setup(){
       out="$(ssh -oStrictHostKeyChecking=no root@$node \
 	"mkfs -t xfs -i size=512 -f $BRICK_DEV 2>&1")"
       (( $? != 0 )) && {
-        display "ERROR: $node: mkfs.xfs: $out" $LOG_FORCE; exit 11; }
+        display "ERROR: $node: mkfs.xfs: $out" $LOG_FORCE; exit 12; }
       display "mkfs.xfs: $out" $LOG_DEBUG
 
       # use volname dir under brick by convention
       out="$(ssh -oStrictHostKeyChecking=no root@$node \
 	"mkdir -p $BRICK_MNT 2>&1")"
       (( $? != 0 )) && {
-        display "ERROR: $node: mkdir $BRICK_MNT: $out" $LOG_FORCE; exit 12; }
+        display "ERROR: $node: mkdir $BRICK_MNT: $out" $LOG_FORCE; exit 13; }
       display "mkdir $BRICK_MNT: $out" $LOG_DEBUG
 
       # make vol mnt dir
       out="$(ssh -oStrictHostKeyChecking=no root@$node \
         "mkdir -p $GLUSTER_MNT 2>&1")"
       (( $? != 0 )) && {
-        display "ERROR: $node: mkdir $GLUSTER_MNT: $out" $LOG_FORCE; exit 13; }
+        display "ERROR: $node: mkdir $GLUSTER_MNT: $out" $LOG_FORCE; exit 14; }
       display "mkdir $GLUSTER_MNT: $out" $LOG_DEBUG
 
       # append brick and gluster mounts to fstab
@@ -703,7 +718,7 @@ function setup(){
 		0 0' >>/etc/fstab
         fi")"
       (( $? != 0 )) && {
-        display "ERROR: $node: append fstab: $out" $LOG_FORCE; exit 14; }
+        display "ERROR: $node: append fstab: $out" $LOG_FORCE; exit 15; }
       display "append fstab: $out" $LOG_DEBUG
 
       # Note: mapred scratch dir must be created *after* the brick is
@@ -713,7 +728,7 @@ function setup(){
       out="$(ssh -oStrictHostKeyChecking=no root@$node \
 	"mount $BRICK_DIR 2>&1")" # mount via fstab
       (( $? != 0 )) && {
-        display "ERROR: $node: mount $BRICK_DIR: $out" $LOG_FORCE; exit 15; }
+        display "ERROR: $node: mount $BRICK_DIR: $out" $LOG_FORCE; exit 16; }
       display "append fstab: $out" $LOG_DEBUG
 
       out="$(ssh -oStrictHostKeyChecking=no root@$node \

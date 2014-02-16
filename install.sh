@@ -404,11 +404,10 @@ function verify_pool_created(){
   while (( i < LIMIT )) ; do # don't loop forever
       # out contains lines where the state != desired state, == problem
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode \
-	gluster peer status)"
-      if (( $? == 0 )) ; then # probe worked
-	if ! grep 'State: ' <<<$out|grep -v "$DESIRED_STATE" >&/dev/null; then
-	  break # all nodes are connected, so done
-        fi
+	   gluster peer status|grep 'State: ')"
+      if [[ -n "$out" ]] ; then # have all State: lines else unexpected output
+        out="$(grep -v "$DESIRED_STATE" <<<$out)"
+        [[ -z "$out" ]] && break # empty -> all nodes in desired state
       fi
       sleep $SLEEP 
       ((i++))
@@ -580,7 +579,7 @@ function cleanup(){
   display "  -- on all nodes:"          $LOG_INFO
   display "       rm $GLUSTER_MNT..."   $LOG_INFO
   display "       umount $BRICK_DIR..." $LOG_INFO
-  display "       rm $BRICK_DIR and $MAPRED_SCRATCH_DIR..." $LOG_INFO
+  display "       rm $BRICK_DIR..."     $LOG_INFO
   out=''
   for node in "${HOSTS[@]}"; do
       out+="$(ssh -oStrictHostKeyChecking=no root@$node "
@@ -589,7 +588,6 @@ function cleanup(){
             umount $BRICK_DIR 2>&1
           fi
           rm -rf $BRICK_DIR 2>&1
-          rm -rf $MAPRED_SCRATCH_DIR 2>&1
       ")"
       out+="\n"
   done

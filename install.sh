@@ -23,7 +23,7 @@
 
 # set global variables
 SCRIPT=$(basename $0)
-INSTALL_VER='0.67'   # self version
+INSTALL_VER='0.68'   # self version
 INSTALL_DIR=$PWD     # name of deployment (install-from) dir
 INSTALL_FROM_IP=($(hostname -I))
 INSTALL_FROM_IP=${INSTALL_FROM_IP[$(( ${#INSTALL_FROM_IP[@]}-1 ))]} # last ntry
@@ -507,7 +507,7 @@ function verify_gluster_mnt(){
 # 2) stop vol if started **
 # 3) delete vol if created **
 # 4) detach nodes if trusted pool created
-# 5) kill gluster processes and delete gluster log files
+# 5) kill gluster processes
 # 6) rm vol_mnt
 # 7) unmount brick_mnt if xfs mounted
 # 8) rm brick_mnt; rm mapred scratch dir
@@ -516,10 +516,10 @@ function verify_gluster_mnt(){
 #
 function cleanup(){
 
-  local node=''; local out
+  local node=''; local out; local err
 
   # 0) start glusterd service in case it's been stopped. Needed for detach
-  service glusterd start >& /dev/null
+  out="$(ssh -oStrictHostKeyChecking=no root@$firstNode service glusterd start)"
 
   # 1) umount vol on every node, if mounted
   display "  -- un-mounting $GLUSTER_MNT on all nodes..." $LOG_INFO
@@ -566,11 +566,9 @@ function cleanup(){
     verify_peer_detach
   fi
 
-  # 5) kill gluster processes and delete gluster log files
+  # 5) kill gluster processes
   display "Kill gluster processes..."   $LOG_INFO
-  display "Delete gluster log files..." $LOG_INFO
   killall glusterd glusterfs glusterfsd 2>/dev/null # no error handling yet...
-  rm -rf /var/log/glusterfs/*
 
   # 6) rm vol_mnt on every node
   # 7) unmount brick_mnt on every node, if xfs mounted
@@ -590,6 +588,14 @@ function cleanup(){
       ")"
       out+="\n"
   done
+
+  out="$(ssh -oStrictHostKeyChecking=no root@$firstNode service glusterd start)"
+  err=$?
+  if (( err != 0 )) ; then
+    display "ERROR $err: cannot start glusterd: $out" $LOG_FORCE
+    exit 11
+  fi
+
   display "rm vol_mnt, umount brick, rm brick: $out" $LOG_DEBUG
 }
 
@@ -661,19 +667,11 @@ function setup(){
   local MR_PERMS=(0775 0770 0755 1777 0775 0755 1777 1777 0770 0770 1777 0770)
   local MR_OWNERS=("$YARN_U" "$MAPRED_U" "$MAPRED_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$HBASE_U")
 
-  # 0) start glusterd service
   # 1) mkfs.xfs brick_dev on every node
   # 2) mkdir brick_dir and vol_mnt on every node
   # 3) append brick_dir and gluster mount entries to fstab on every node
   # 4) mount brick on every node
   # 5) mkdir mapredlocal scratch dir on every node (done after brick mount)
-  out="$(ssh -oStrictHostKeyChecking=no root@$firstNode service glusterd start)"
-  err=$?
-  if (( err != 0 )) ; then
-    display "ERROR $err: cannot start glusterd: $out" $LOG_FORCE
-    exit 11
-  fi
-
   display "  -- on all nodes:"                           $LOG_INFO
   display "       mkfs.xfs $BRICK_DEV..."                $LOG_INFO
   display "       mkdir $BRICK_DIR, $GLUSTER_MNT and $MAPRED_SCRATCH_DIR..." $LOG_INFO

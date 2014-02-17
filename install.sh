@@ -549,7 +549,6 @@ function cleanup(){
   display "vol stop/delete: $out" $LOG_DEBUG
 
   # 4) detach nodes if trusted pool created, on all but first node
-  # note: peer probe hostname cannot be self node
   display "       detach all nodes..."   $LOG_INFO
   out="$(ssh -oStrictHostKeyChecking=no root@$firstNode \
 	"gluster peer status|head -n 1")"
@@ -659,7 +658,7 @@ function setup(){
   # note: if a dirname is relative (doesn't start with '/') then the gluster
   #  mount is prepended to it
   local MR_DIRS=("$GLUSTER_MNT" 'mapred' 'mapred/system' 'tmp' 'user' 'mr-history' "$YARN_NM_REMOTE_APP_LOG_DIR" "$MR_JOB_HIST_INTERMEDIATE_DONE" "$MR_JOB_HIST_DONE" "$YARN_STAGE" "$MR_JOB_HIST_APPS_LOGS" 'hbase')
-  local MR_PERMS=(0775 0770 0755 1777 0775 0755 1777 1777 0750 0770 1777 0770)
+  local MR_PERMS=(0775 0770 0755 1777 0775 0755 1777 1777 0770 0770 1777 0770)
   local MR_OWNERS=("$YARN_U" "$MAPRED_U" "$MAPRED_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$HBASE_U")
 
   # 0) start glusterd service

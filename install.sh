@@ -125,7 +125,7 @@ EOF
 function parse_cmd(){
 
   local OPTIONS='vhqy'
-  local LONG_OPTS='brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,help,version,quiet,debug,clean,mkdirs'
+  local LONG_OPTS='brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,help,version,quiet,debug,clean,dirs,users'
 
   # defaults (global variables)
   BRICK_DIR='/mnt/brick1'
@@ -196,11 +196,27 @@ function parse_cmd(){
 	    SKIP[perf]=true
 	    shift; continue
 	;;
-	--mkdirs)
+	--dirs)
 	    SKIP[report]=true
 	    SKIP[install_nodes]=true
 	    SKIP[clean]=true
 	    SKIP[setup]=false  # <--
+	    SKIP[setup.xfs]=true
+	    SKIP[setup.vol]=true
+	    SKIP[setup.users]=true
+	    SKIP[setup.dirs]=false  # <--
+	    SKIP[perf]=true
+	    shift; continue
+	;;
+	--users)
+	    SKIP[report]=true
+	    SKIP[install_nodes]=true
+	    SKIP[clean]=true
+	    SKIP[setup]=false  # <--
+	    SKIP[setup.xfs]=true
+	    SKIP[setup.vol]=true
+	    SKIP[setup.users]=false # <--
+	    SKIP[setup.dirs]=true
 	    SKIP[perf]=true
 	    shift; continue
 	;;
@@ -812,13 +828,14 @@ function create_hadoop_dirs(){
 #  7) create vol **
 #  8) start vol **
 #  9) mount vol
-#  10) create distributed mapred/system and mr-history/done dirs (must be done
+#  10) create the mapred and yarn users, and the hadoop group
+#  11) create distributed mapred/system and mr-history/done dirs (must be done
 #      after the vol mount)
-#  11) create the mapred and yarn users, and the hadoop group
 #  12) chmod gluster mnt, mapred/system and brick1/mapred scratch dir
 #  13) chown to mapred:hadoop the above
 # ** gluster cmd only done once for entire pool; all other cmds executed on
 #    each node
+# NOTE: the SKIP variable controls which features of setup() are done.
 # TODO: limit disk space usage in MapReduce scratch dir so that it does not
 #       consume too much of the shared storage space.
 #
@@ -835,75 +852,84 @@ function setup(){
   local MAPRED_U='mapred'
   local MR_USERS=("$MAPRED_U" "$YARN_U" "$HBASE_U")
 
-  # 1) mkfs.xfs brick_dev on every node
-  # 2) mkdir brick_dir and vol_mnt on every node
-  # 3) append brick_dir and gluster mount entries to fstab on every node
-  # 4) mount brick on every node
-  # 5) mkdir mapredlocal scratch dir on every node (done after brick mount)
-  display "  -- on all nodes:"                           $LOG_INFO
-  display "       mkfs.xfs $BRICK_DEV..."                $LOG_INFO
-  display "       mkdir $BRICK_DIR, $GLUSTER_MNT and $MAPRED_SCRATCH_DIR..." $LOG_INFO
-  display "       append mount entries to /etc/fstab..." $LOG_INFO
-  display "       mount $BRICK_DIR..."                   $LOG_INFO
-  for node in "${HOSTS[@]}"; do
-      xfs_brick_dirs_mnt "$node"
-  done
+  if [[ "${SKIP[setup.xfs]}" == false ]] ; then
+    # 1) mkfs.xfs brick_dev on every node
+    # 2) mkdir brick_dir and vol_mnt on every node
+    # 3) append brick_dir and gluster mount entries to fstab on every node
+    # 4) mount brick on every node
+    # 5) mkdir mapredlocal scratch dir on every node (done after brick mount)
+    display "  -- on all nodes:"                           $LOG_INFO
+    display "       mkfs.xfs $BRICK_DEV..."                $LOG_INFO
+    display "       mkdir $BRICK_DIR, $GLUSTER_MNT and $MAPRED_SCRATCH_DIR..." $LOG_INFO
+    display "       append mount entries to /etc/fstab..." $LOG_INFO
+    display "       mount $BRICK_DIR..."                   $LOG_INFO
+    for node in "${HOSTS[@]}"; do
+	xfs_brick_dirs_mnt "$node"
+    done
+  fi
 
-  # 6) create trusted pool from first node
-  # 7) create vol on a single node
-  # 8) start vol on a single node
-  display "  -- from node $firstNode:"         $LOG_INFO
-  display "       creating trusted pool..."    $LOG_INFO
-  display "       creating $VOLNAME volume..." $LOG_INFO
-  display "       starting $VOLNAME volume..." $LOG_INFO
-  create_trusted_pool
-  verify_pool_created
-
-  # create vol
-  out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+  if [[ "${SKIP[setup.vol]}" == false ]] ; then
+    # 6) create trusted pool from first node
+    # 7) create vol on a single node
+    # 8) start vol on a single node
+    # 9) mount vol on every node
+    display "  -- from node $firstNode:"              $LOG_INFO
+    display "       creating trusted pool..."         $LOG_INFO
+    display "       creating $VOLNAME volume..."      $LOG_INFO
+    display "       starting $VOLNAME volume..."      $LOG_INFO
+    display "  -- mount $GLUSTER_MNT on all nodes..." $LOG_INFO
+    create_trusted_pool
+    verify_pool_created
+    # create vol
+    out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
 	gluster volume create $VOLNAME replica $REPLICA_CNT $bricks 2>&1")"
-  err=$?
-  display "vol create: $out" $LOG_DEBUG
-  verify_vol_created $err
-
-  # start vol
-  out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+    err=$?
+    display "vol create: $out" $LOG_DEBUG
+    verify_vol_created $err
+    # start vol
+    out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
 	gluster --mode=script volume start $VOLNAME 2>&1")"
-  err=$?
-  display "vol start: $out" $LOG_DEBUG
-  verify_vol_started $err
+    err=$?
+    display "vol start: $out" $LOG_DEBUG
+    verify_vol_started $err
+    # ownership and permissions must be set *afer* the gluster vol is mounted
+    for node in "${HOSTS[@]}"; do
+	display "-- $node -- mount volume" $LOG_INFO
+	mount_volume "$node"
+    done
+  fi
 
-  # 9) mount vol on every node
-  # 10) create distributed mapred/system and mr-history/done dirs on each node
-  # 11) create the mapred and yarn users, and the hadoop group on each node
-  # 12) chmod on the gluster mnt and the mapred scracth dir on every node
-  # 13) chown on the gluster mnt and mapred scratch dir on every node
-  display "  -- on all nodes:"                      $LOG_INFO
-  display "       mount $GLUSTER_MNT..."            $LOG_INFO
-  display "       create users and group as needed..." $LOG_INFO
-  display "       create M/R directories..."        $LOG_INFO
-  display "       change owner and permissions..."  $LOG_INFO
-  # Note: ownership and permissions must be set *afer* the gluster vol is
-  #       mounted.
-  for node in "${HOSTS[@]}"; do
-      display "-- $node -- mount vol and create $HADOOP_G group" $LOG_INFO
-      mount_volume "$node"
-      create_hadoop_group "$node" "$HADOOP_G"
-  done
-  # validate consistent hadoop group GID across cluster
-  verify_hadoop_gid "$HADOOP_G"
+  if [[ "${SKIP[setup.users]}" == false ]] ; then
+    # 10) create the mapred and yarn users, and the hadoop group on each node
+    display "  -- on all nodes:"                         $LOG_INFO
+    display "       create users and group as needed..." $LOG_INFO
+    for node in "${HOSTS[@]}"; do
+	display "-- $node -- create $HADOOP_G group" $LOG_INFO
+	create_hadoop_group "$node" "$HADOOP_G"
+    done
+    # validate consistent hadoop group GID across cluster
+    verify_hadoop_gid "$HADOOP_G"
+    # create users
+    for node in "${HOSTS[@]}"; do
+	display "-- $node -- create users" $LOG_INFO
+	create_hadoop_users "$node" "$HADOOP_G" MR_USERS[@] # last arg is *name*
+    done
+    # validate consistent m/r-yarn user IDs across cluster
+    verify_user_uids ${MR_USERS[@]}
+  fi
 
-  for node in "${HOSTS[@]}"; do
-      display "-- $node -- create users" $LOG_INFO
-      create_hadoop_users "$node" "$HADOOP_G" MR_USERS[@] # last arg is by-name!
-  done
-  # validate consistent m/r-yarn user IDs across cluster
-  verify_user_uids ${MR_USERS[@]}
-
-  for node in "${HOSTS[@]}"; do
-      display "-- $node -- create hadoop directories" $LOG_INFO
-      create_hadoop_dirs "$node"
-  done
+  if [[ "${SKIP[setup.dirs]}" == false ]] ; then
+    # 11) create distributed mapred/system and mr-history/done dirs on each node
+    # 12) chmod on the gluster mnt and the mapred scracth dir on every node
+    # 13) chown on the gluster mnt and mapred scratch dir on every node
+    display "  -- on all nodes:"                     $LOG_INFO
+    display "       create hadoop directories..."    $LOG_INFO
+    display "       change owner and permissions..." $LOG_INFO
+    for node in "${HOSTS[@]}"; do
+	display "-- $node -- create hadoop directories" $LOG_INFO
+	create_hadoop_dirs "$node"
+    done
+  fi
 }
 
 # install_nodes: for each node in the hosts file copy the "data" sub-directory
@@ -1123,6 +1149,10 @@ SKIP[report]=false
 SKIP[install_nodes]=false
 SKIP[clean]=false
 SKIP[setup]=false
+SKIP[setup.xfs]=false
+SKIP[setup.vol]=false
+SKIP[setup.users]=false
+SKIP[setup.dirs]=false
 SKIP[perf]=false
 
 parse_cmd $@

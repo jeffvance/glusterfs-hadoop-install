@@ -23,7 +23,7 @@
 
 # set global variables
 SCRIPT=$(basename $0)
-INSTALL_VER='0.68'   # self version
+INSTALL_VER='0.70'   # self version
 INSTALL_DIR=$PWD     # name of deployment (install-from) dir
 INSTALL_FROM_IP=($(hostname -I))
 INSTALL_FROM_IP=${INSTALL_FROM_IP[$(( ${#INSTALL_FROM_IP[@]}-1 ))]} # last ntry
@@ -549,7 +549,8 @@ function cleanup(){
 
   local node=''; local out; local err
 
-  # 0) start glusterd service in case it's been stopped. Needed for detach
+  # 0) start glusterd service on firstNode in case it's been stopped.
+  #    Needed for detach.
   out="$(ssh -oStrictHostKeyChecking=no root@$firstNode service glusterd start)"
 
   # 1) umount vol on every node, if mounted
@@ -581,25 +582,27 @@ function cleanup(){
 
   # 4) detach nodes if trusted pool created, on all but first node
   display "       detach all nodes..."   $LOG_INFO
-  out="$(ssh -oStrictHostKeyChecking=no root@$firstNode \
-	"gluster peer status|head -n 1")"
+  out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+	gluster peer status|head -n 1")"
   # detach nodes if a pool has been already been formed
   if [[ -n "$out" && ${out##* } > 0 ]] ; then # got output, last tok=# peers
     display "  -- from node $firstNode:" $LOG_INFO
     display "       detaching all other nodes from trusted pool..." $LOG_INFO
     out=''
     for (( i=1; i<$NUMNODES; i++ )); do
-      out+="$(ssh -oStrictHostKeyChecking=no root@$firstNode \
-	"gluster peer detach ${HOSTS[$i]} 2>&1")"
+      out+="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+	gluster peer detach ${HOSTS[$i]} 2>&1")"
       out+="\n"
     done
     display "peer detach: $out" $LOG_DEBUG
     verify_peer_detach
   fi
 
-  # 5) kill gluster processes
-  display "Kill gluster processes..."   $LOG_INFO
-  killall glusterd glusterfs glusterfsd 2>/dev/null # no error handling yet...
+  # 5) kill gluster processes on firstNode, restarted at end of function
+  display " -- from node $firstNode: kill gluster processes..." $LOG_INFO
+  out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+	killall glusterd glusterfs glusterfsd 2>&1")"
+  display "killall gluster: $out" $LOG_DEBUG
 
   # 6) rm vol_mnt on every node
   # 7) unmount brick_mnt on every node, if xfs mounted
@@ -637,17 +640,17 @@ function create_trusted_pool(){
 
   local out; local i
 
-  # note: peer probe hostname cannot be self node
+  # note: peer probe hostname cannot be firstNode
   out=''
   for (( i=1; i<$NUMNODES; i++ )); do # starting at 1, not 0
-      out+="$(ssh -oStrictHostKeyChecking=no root@$firstNode \
-	"gluster peer probe ${HOSTS[$i]} 2>&1")"
+      out+="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+	gluster peer probe ${HOSTS[$i]} 2>&1")"
       out+="\n"
   done
   display "peer probe: $out" $LOG_DEBUG
 
-  out="$(ssh -oStrictHostKeyChecking=no root@$firstNode \
-	'gluster peer status 2>&1')"
+  out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+	gluster peer status 2>&1")"
   display "peer status: $out" $LOG_DEBUG
 }
 

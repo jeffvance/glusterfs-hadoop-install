@@ -338,7 +338,7 @@ function verify_hadoop_gid(){
       out="$(ssh -oStrictHostKeyChecking=no root@$node "getent group $grp")"
       if (( $? != 0 )) || [[ -z "$out" ]] ; then
 	display "ERROR: group $grp not created on $node" $LOG_FORCE
-	exit 2
+	exit 3
       fi
       # extract gid, "hadoop:x:<gid>", eg hadoop:x:500;
       gid=${out%:}   # delete trailing colon
@@ -349,7 +349,7 @@ function verify_hadoop_gid(){
   uniq_gids=($(printf '%s\n' "${gids[@]}" | sort -u))
   if (( ${#uniq_gids[@]} > 1 )) ; then
     display "ERROR: \"$grp\" group has inconsistent GIDs across the cluster. $grp GIDs: ${uniq_gids[*]}" $LOG_FORCE
-    exit 3
+    exit 6
   fi
 }
 
@@ -368,7 +368,7 @@ function verify_user_uids(){
 	out="$(ssh -oStrictHostKeyChecking=no root@$node "id -u $user")"
 	if (( $? != 0 )) || [[ -z "$out" ]] ; then
 	  display "ERROR: user $user not created on $node" $LOG_FORCE
-	  exit 4
+	  exit 9
 	fi
 	uids+=($out)
      done
@@ -376,7 +376,7 @@ function verify_user_uids(){
      uniq_uids=($(printf '%s\n' "${uids[@]}" | sort -u))
      if (( ${#uniq_uids[@]} > 1 )) ; then
        display "ERROR: \"$user\" user has inconsistent UIDs across cluster. $user UIDs: ${uniq_uids[*]}" $LOG_FORCE
-       exit 5
+       exit 12
      fi
   done
 }
@@ -402,7 +402,7 @@ function verify_peer_detach(){
     display "   Trusted pool detached..." $LOG_DEBUG
   else
     display "   ERROR: Trusted pool NOT detached..." $LOG_FORCE
-    exit 6
+    exit 15
   fi
 }
 
@@ -433,7 +433,7 @@ function verify_pool_created(){
     display "   Trusted pool formed..." $LOG_DEBUG
   else
     display "   ERROR: Trusted pool NOT formed..." $LOG_FORCE
-    exit 7
+    exit 18
   fi
 }
 
@@ -461,7 +461,7 @@ function verify_vol_created(){
   else
     display "   ERROR: Volume \"$VOLNAME\" creation failed with error $volCreateErr" $LOG_FORCE
     display "          Bricks=\"$bricks\"" $LOG_FORCE
-    exit 8
+    exit 21
   fi
 }
 
@@ -496,7 +496,7 @@ function verify_vol_started(){
     display "   Volume \"$VOLNAME\" started..." $LOG_DEBUG
   else
     display "   ERROR: Volume \"$VOLNAME\" start failed with error $volStartErr" $LOG_FORCE
-    exit 9
+    exit 24
   fi
 }
 
@@ -512,7 +512,7 @@ function verify_gluster_mnt(){
 	"grep $GLUSTER_MNT /proc/mounts 2>&1")"
   if (( $? != 0 )) ; then
     display "ERROR: $GLUSTER_MNT *NOT* mounted" $LOG_FORCE
-    exit 10
+    exit 27
   fi
   display "$GLUSTER_MNT mounted: $out" $LOG_DEBUG
 }
@@ -608,7 +608,7 @@ function cleanup(){
   err=$?
   if (( err != 0 )) ; then
     display "ERROR $err: cannot start glusterd: $out" $LOG_FORCE
-    exit 11
+    exit 30
   fi
 
   display "rm vol_mnt, umount brick, rm brick: $out" $LOG_DEBUG
@@ -651,21 +651,21 @@ function xfs_brick_dirs_mnt(){
   out="$(ssh -oStrictHostKeyChecking=no root@$node "
 	mkfs -t xfs -i size=512 -f $BRICK_DEV 2>&1")"
   (( $? != 0 )) && {
-    display "ERROR: $node: mkfs.xfs: $out" $LOG_FORCE; exit 12; }
+    display "ERROR: $node: mkfs.xfs: $out" $LOG_FORCE; exit 33; }
   display "mkfs.xfs: $out" $LOG_DEBUG
 
   # use volname dir under brick by convention
   out="$(ssh -oStrictHostKeyChecking=no root@$node "
 	mkdir -p $BRICK_MNT 2>&1")"
   (( $? != 0 )) && {
-    display "ERROR: $node: mkdir $BRICK_MNT: $out" $LOG_FORCE; exit 13; }
+    display "ERROR: $node: mkdir $BRICK_MNT: $out" $LOG_FORCE; exit 36; }
   display "mkdir $BRICK_MNT: $out" $LOG_DEBUG
 
   # make vol mnt dir
   out="$(ssh -oStrictHostKeyChecking=no root@$node "
         mkdir -p $GLUSTER_MNT 2>&1")"
   (( $? != 0 )) && {
-    display "ERROR: $node: mkdir $GLUSTER_MNT: $out" $LOG_FORCE; exit 14; }
+    display "ERROR: $node: mkdir $GLUSTER_MNT: $out" $LOG_FORCE; exit 39; }
   display "mkdir $GLUSTER_MNT: $out" $LOG_DEBUG
 
   # append brick and gluster mounts to fstab
@@ -678,7 +678,7 @@ function xfs_brick_dirs_mnt(){
 		0 0' >>/etc/fstab
         fi")"
   (( $? != 0 )) && {
-    display "ERROR: $node: append fstab: $out" $LOG_FORCE; exit 15; }
+    display "ERROR: $node: append fstab: $out" $LOG_FORCE; exit 42; }
   display "append fstab: $out" $LOG_DEBUG
 
   # Note: mapred scratch dir must be created *after* the brick is
@@ -688,14 +688,14 @@ function xfs_brick_dirs_mnt(){
   out="$(ssh -oStrictHostKeyChecking=no root@$node "
 	mount $BRICK_DIR 2>&1")" # mount via fstab
   (( $? != 0 )) && {
-    display "ERROR: $node: mount $BRICK_DIR: $out" $LOG_FORCE; exit 16; }
+    display "ERROR: $node: mount $BRICK_DIR: $out" $LOG_FORCE; exit 45; }
   display "append fstab: $out" $LOG_DEBUG
 
   out="$(ssh -oStrictHostKeyChecking=no root@$node "
 	mkdir -p $MAPRED_SCRATCH_DIR 2>&1")"
   (( $? != 0 )) && {
     display "ERROR: $node: mkdir $MAPRED_SCRATCH_DIR: $out" $LOG_FORCE;
-    exit 17; }
+    exit 48; }
 
   display "mkdir $MAPRED_SCRATCH_DIR: $out" $LOG_DEBUG
 }
@@ -712,7 +712,7 @@ function mount_volume(){
   out="$(ssh -oStrictHostKeyChecking=no root@$node "mount $GLUSTER_MNT 2>&1")"
   (( $? != 0 )) && {
     display "ERROR: $node: mount $GLUSTER_MNT: $out" $LOG_FORCE;
-    exit 21; }
+    exit 52; }
 
   display "mount $GLUSTER_MNT: $out" $LOG_DEBUG
   verify_gluster_mnt "$node"  # important for later chmod/chown
@@ -732,7 +732,7 @@ function create_hadoop_group(){
 	  groupadd --system $grp 2>&1 # note: no password
 	fi")"
   (( $? != 0 )) && {
-    display "ERROR: $node: groupadd $grp: $out" $LOG_FORCE; exit 23; }
+    display "ERROR: $node: groupadd $grp: $out" $LOG_FORCE; exit 55; }
 
   display "groupadd $grp: $out" $LOG_DEBUG
 }
@@ -756,7 +756,7 @@ function create_hadoop_users(){
 	     fi")"
       (( $? != 0 )) && {
 	display "ERROR: $node: useradd $user: $out" $LOG_FORCE;
-	exit 25; }
+	exit 58; }
       display "useradd $user: $out" $LOG_DEBUG
   done
 }
@@ -795,7 +795,7 @@ function create_hadoop_dirs(){
 	     chown $owner:$HADOOP_G $dir 2>&1")"
       (( $? != 0 )) && {
 	display "ERROR: $node: mkdir/chmod/chown on $dir: $out" $LOG_FORCE;
-	exit 27; }
+	exit 61; }
       display "mkdir/chmod/chown on $dir: $out" $LOG_DEBUG
   done
 }
@@ -954,7 +954,7 @@ function install_nodes(){
     display "copy install files: $out" $LOG_DEBUG
     if (( err != 0 )) ; then
       display "ERROR: scp install files error $err" $LOG_FORCE
-      exit 35
+      exit 64
     fi
 
     # delcare local associative args array, rather than passing separate args
@@ -992,7 +992,7 @@ function install_nodes(){
     elif (( err != 0 )) ; then # fatal error in install.sh so quit now
       display " *** ERROR! prep_node script exited with error: $err ***" \
 	$LOG_FORCE
-      exit 37
+      exit 67
     fi
   }
 

@@ -125,14 +125,13 @@ EOF
 function parse_cmd(){
 
   local OPTIONS='vhqy'
-  local LONG_OPTS='brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,help,version,quiet,debug'
+  local LONG_OPTS='brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,help,version,quiet,debug,clean,mkdirs'
 
   # defaults (global variables)
   BRICK_DIR='/mnt/brick1'
   VOLNAME='HadoopVol'
   GLUSTER_MNT='/mnt/glusterfs'
   REPLICA_CNT=2
-  NEW_DEPLOY=true
   # "hosts" file concontains hostname ip-addr for all nodes in cluster
   HOSTS_FILE="$INSTALL_DIR/hosts"
   MGMT_NODE=''
@@ -188,6 +187,22 @@ function parse_cmd(){
 	;;
 	--debug)
 	    VERBOSE=$LOG_DEBUG; shift; continue
+	;;
+	--clean)
+	    SKIP[report]=true
+	    SKIP[install_nodes]=true
+	    SKIP[clean]=false  # <--
+	    SKIP[setup]=true
+	    SKIP[perf]=true
+	    shift; continue
+	;;
+	--mkdirs)
+	    SKIP[report]=true
+	    SKIP[install_nodes]=true
+	    SKIP[clean]=true
+	    SKIP[setup]=false  # <--
+	    SKIP[perf]=true
+	    shift; continue
 	;;
 	--)  # no more args to parse
 	    shift; break
@@ -620,6 +635,171 @@ function create_trusted_pool(){
   display "peer status: $out" $LOG_DEBUG
 }
 
+# xfs_brick_dirs_mnt: invoked by setup(). On the passed-in node:
+#   mkfs.xfs brick_dev on every node
+#   mkdir brick_dir and vol_mnt on every node
+#   append brick_dir and gluster mount entries to fstab on every node
+#   mount brick on every node
+#   mkdir mapredlocal scratch dir on every node (done after brick mount)
+# Args: $1=node (hostname)
+#
+function xfs_brick_dirs_mnt(){
+
+  local node="$1"; local out
+
+  # mkfs.xfs
+  out="$(ssh -oStrictHostKeyChecking=no root@$node "
+	mkfs -t xfs -i size=512 -f $BRICK_DEV 2>&1")"
+  (( $? != 0 )) && {
+    display "ERROR: $node: mkfs.xfs: $out" $LOG_FORCE; exit 12; }
+  display "mkfs.xfs: $out" $LOG_DEBUG
+
+  # use volname dir under brick by convention
+  out="$(ssh -oStrictHostKeyChecking=no root@$node "
+	mkdir -p $BRICK_MNT 2>&1")"
+  (( $? != 0 )) && {
+    display "ERROR: $node: mkdir $BRICK_MNT: $out" $LOG_FORCE; exit 13; }
+  display "mkdir $BRICK_MNT: $out" $LOG_DEBUG
+
+  # make vol mnt dir
+  out="$(ssh -oStrictHostKeyChecking=no root@$node "
+        mkdir -p $GLUSTER_MNT 2>&1")"
+  (( $? != 0 )) && {
+    display "ERROR: $node: mkdir $GLUSTER_MNT: $out" $LOG_FORCE; exit 14; }
+  display "mkdir $GLUSTER_MNT: $out" $LOG_DEBUG
+
+  # append brick and gluster mounts to fstab
+  out="$(ssh -oStrictHostKeyChecking=no root@$node "
+        if ! grep -qs $BRICK_DIR /etc/fstab ; then
+          echo '$BRICK_DEV $BRICK_DIR xfs  $BRICK_MNT_OPTS  0 0' >>/etc/fstab
+        fi
+        if ! grep -qs $GLUSTER_MNT /etc/fstab ; then
+          echo '$node:/$VOLNAME  $GLUSTER_MNT  glusterfs  $GLUSTER_MNT_OPTS \
+		0 0' >>/etc/fstab
+        fi")"
+  (( $? != 0 )) && {
+    display "ERROR: $node: append fstab: $out" $LOG_FORCE; exit 15; }
+  display "append fstab: $out" $LOG_DEBUG
+
+  # Note: mapred scratch dir must be created *after* the brick is
+  # mounted; otherwise, mapred dir will be "hidden" by the mount.
+  # Also, permissions and owner must be set *after* the gluster dir 
+  # is mounted for the same reason -- see below.
+  out="$(ssh -oStrictHostKeyChecking=no root@$node "
+	mount $BRICK_DIR 2>&1")" # mount via fstab
+  (( $? != 0 )) && {
+    display "ERROR: $node: mount $BRICK_DIR: $out" $LOG_FORCE; exit 16; }
+  display "append fstab: $out" $LOG_DEBUG
+
+  out="$(ssh -oStrictHostKeyChecking=no root@$node "
+	mkdir -p $MAPRED_SCRATCH_DIR 2>&1")"
+  (( $? != 0 )) && {
+    display "ERROR: $node: mkdir $MAPRED_SCRATCH_DIR: $out" $LOG_FORCE;
+    exit 17; }
+
+  display "mkdir $MAPRED_SCRATCH_DIR: $out" $LOG_DEBUG
+}
+
+# mount_volume: on the passed-in node, mount the hadoop volume and verify that
+# the mount worked.
+# Args: $1=node (hostname)
+#
+function mount_volume(){
+
+  local node="$1"; local out
+
+  # mount vol via fstab
+  out="$(ssh -oStrictHostKeyChecking=no root@$node "mount $GLUSTER_MNT 2>&1")"
+  (( $? != 0 )) && {
+    display "ERROR: $node: mount $GLUSTER_MNT: $out" $LOG_FORCE;
+    exit 21; }
+
+  display "mount $GLUSTER_MNT: $out" $LOG_DEBUG
+  verify_gluster_mnt "$node"  # important for later chmod/chown
+}
+
+# create_hadoop_group: on the passed-in node, create the haddop group if it
+# does not already exist.
+# Args: $1=node (hostname), $2=hadoop group name
+#
+function create_hadoop_group(){
+
+  local node="$1"; local grp="$2"; local out
+
+  # create hadoop group, if needed
+  out="$(ssh -oStrictHostKeyChecking=no root@$node "
+	if ! getent group $grp >/dev/null ; then
+	  groupadd --system $grp 2>&1 # note: no password
+	fi")"
+  (( $? != 0 )) && {
+    display "ERROR: $node: groupadd $grp: $out" $LOG_FORCE; exit 23; }
+
+  display "groupadd $grp: $out" $LOG_DEBUG
+}
+
+# create_hadoop_users: for the passed-in node, create the users needed for
+# typical hadoop jobs, if they do not already exist.
+# Args: $1=node (hostname), $2=hadoop group name,
+#       $3 *name* of array of YARN/MR users
+#
+function create_hadoop_users(){
+
+  local node="$1"; local grp="$2"; local user_names="$3"
+  users=("${!user_names}") # array of user names
+  local out; local user
+
+  # create the required M/R-YARN users, if needed
+  for user in "${users[@]}" ; do
+      out="$(ssh -oStrictHostKeyChecking=no root@$node "
+	     if ! getent passwd $user >/dev/null ; then
+ 		useradd --system -g $HADOOP_G $user 2>&1
+	     fi")"
+      (( $? != 0 )) && {
+	display "ERROR: $node: useradd $user: $out" $LOG_FORCE;
+	exit 25; }
+      display "useradd $user: $out" $LOG_DEBUG
+  done
+}
+
+# create_hadoop_dirs: create all the directories needed for typical hadoop jobs.
+# Also, assign the correct owners and permissions to each directory.
+#
+function create_hadoop_dirs(){
+
+  local node="$1"
+  local i; local out; local dir; local owner; local perm
+
+  local YARN_NM_REMOTE_APP_LOG_DIR='tmp/logs'
+  local MR_JOB_HIST_INTERMEDIATE_DONE='mr-history/tmp'
+  local MR_JOB_HIST_DONE='mr-history/done'
+  local YARN_STAGE='job-staging-yarn'
+  local MR_JOB_HIST_APPS_LOGS='app-logs'
+
+  # the next 3 arrays are all paired
+  # note: if a dirname is relative (doesn't start with '/') then the gluster
+  #  mount is prepended to it
+  local MR_DIRS=("$GLUSTER_MNT" 'mapred' 'mapred/system' 'tmp' 'user' 'mr-history' "$YARN_NM_REMOTE_APP_LOG_DIR" "$MR_JOB_HIST_INTERMEDIATE_DONE" "$MR_JOB_HIST_DONE" "$YARN_STAGE" "$MR_JOB_HIST_APPS_LOGS" 'hbase')
+  local MR_PERMS=(0775 0770 0755 1777 0775 0755 1777 1777 0770 0770 1777 0770)
+  local MR_OWNERS=("$YARN_U" "$MAPRED_U" "$MAPRED_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$HBASE_U")
+
+  # create all of the M/R-YARN dirs with correct perms and owner
+  for (( i=0 ; i<${#MR_DIRS[@]} ; i++ )) ; do
+      dir="${MR_DIRS[$i]}"
+      # prepend gluster mnt unless dir name is an absolute pathname
+      [[ "${dir:0:1}" != '/' ]] && dir="$GLUSTER_MNT/$dir"
+      perm="${MR_PERMS[$i]}"
+      owner="${MR_OWNERS[$i]}"
+      out="$(ssh -oStrictHostKeyChecking=no root@$node "
+	     mkdir -p $dir 2>&1     && \
+	     chmod $perm $dir 2>&1  && \
+	     chown $owner:$HADOOP_G $dir 2>&1")"
+      (( $? != 0 )) && {
+	display "ERROR: $node: mkdir/chmod/chown on $dir: $out" $LOG_FORCE;
+	exit 27; }
+      display "mkdir/chmod/chown on $dir: $out" $LOG_DEBUG
+  done
+}
+
 # setup: create a directory, owner, permissions, mounts environment for Hadoop
 # jobs. Note that the order below is very important, particualarly creating DFS
 # directories and their permissions *after* the mount.
@@ -644,28 +824,16 @@ function create_trusted_pool(){
 #
 function setup(){
 
-  local i=0; local node=''; local ip; local out; local err
+  local i=0; local node=''; local out; local err
   local BRICK_MNT_OPTS="noatime,inode64"
   local GLUSTER_MNT_OPTS="entry-timeout=0,attribute-timeout=0,use-readdirp=no,acl,_netdev"
-  local dir; local perm; local owner
-  local user; local uid
+  local dir; local perm; local owner; local uid
+  local HBASE_U='hbase'
+  local YARN_U='yarn'; local YARN_UID=502
   # note: all users/owners belong to the hadoop group for now
   local HADOOP_G='hadoop'
   local MAPRED_U='mapred'
-  local HBASE_U='hbase'
-  local YARN_U='yarn'; local YARN_UID=502
   local MR_USERS=("$MAPRED_U" "$YARN_U" "$HBASE_U")
-  local YARN_NM_REMOTE_APP_LOG_DIR='tmp/logs'
-  local MR_JOB_HIST_INTERMEDIATE_DONE='mr-history/tmp'
-  local MR_JOB_HIST_DONE='mr-history/done'
-  local YARN_STAGE='job-staging-yarn'
-  local MR_JOB_HIST_APPS_LOGS='app-logs'
-  # the next 3 arrays are all paired
-  # note: if a dirname is relative (doesn't start with '/') then the gluster
-  #  mount is prepended to it
-  local MR_DIRS=("$GLUSTER_MNT" 'mapred' 'mapred/system' 'tmp' 'user' 'mr-history' "$YARN_NM_REMOTE_APP_LOG_DIR" "$MR_JOB_HIST_INTERMEDIATE_DONE" "$MR_JOB_HIST_DONE" "$YARN_STAGE" "$MR_JOB_HIST_APPS_LOGS" 'hbase')
-  local MR_PERMS=(0775 0770 0755 1777 0775 0755 1777 1777 0770 0770 1777 0770)
-  local MR_OWNERS=("$YARN_U" "$MAPRED_U" "$MAPRED_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$HBASE_U")
 
   # 1) mkfs.xfs brick_dev on every node
   # 2) mkdir brick_dir and vol_mnt on every node
@@ -677,61 +845,8 @@ function setup(){
   display "       mkdir $BRICK_DIR, $GLUSTER_MNT and $MAPRED_SCRATCH_DIR..." $LOG_INFO
   display "       append mount entries to /etc/fstab..." $LOG_INFO
   display "       mount $BRICK_DIR..."                   $LOG_INFO
-  out=''
-  for (( i=0; i<$NUMNODES; i++ )); do
-      node="${HOSTS[$i]}"
-      ip="${HOST_IPS[$i]}"
-
-      # mkfs.xfs
-      out="$(ssh -oStrictHostKeyChecking=no root@$node \
-	"mkfs -t xfs -i size=512 -f $BRICK_DEV 2>&1")"
-      (( $? != 0 )) && {
-        display "ERROR: $node: mkfs.xfs: $out" $LOG_FORCE; exit 12; }
-      display "mkfs.xfs: $out" $LOG_DEBUG
-
-      # use volname dir under brick by convention
-      out="$(ssh -oStrictHostKeyChecking=no root@$node \
-	"mkdir -p $BRICK_MNT 2>&1")"
-      (( $? != 0 )) && {
-        display "ERROR: $node: mkdir $BRICK_MNT: $out" $LOG_FORCE; exit 13; }
-      display "mkdir $BRICK_MNT: $out" $LOG_DEBUG
-
-      # make vol mnt dir
-      out="$(ssh -oStrictHostKeyChecking=no root@$node \
-        "mkdir -p $GLUSTER_MNT 2>&1")"
-      (( $? != 0 )) && {
-        display "ERROR: $node: mkdir $GLUSTER_MNT: $out" $LOG_FORCE; exit 14; }
-      display "mkdir $GLUSTER_MNT: $out" $LOG_DEBUG
-
-      # append brick and gluster mounts to fstab
-      out="$(ssh -oStrictHostKeyChecking=no root@$node "
-        if ! grep -qs $BRICK_DIR /etc/fstab ; then
-          echo '$BRICK_DEV $BRICK_DIR xfs  $BRICK_MNT_OPTS  0 0' >>/etc/fstab
-        fi
-        if ! grep -qs $GLUSTER_MNT /etc/fstab ; then
-          echo '$node:/$VOLNAME  $GLUSTER_MNT  glusterfs  $GLUSTER_MNT_OPTS \
-		0 0' >>/etc/fstab
-        fi")"
-      (( $? != 0 )) && {
-        display "ERROR: $node: append fstab: $out" $LOG_FORCE; exit 15; }
-      display "append fstab: $out" $LOG_DEBUG
-
-      # Note: mapred scratch dir must be created *after* the brick is
-      # mounted; otherwise, mapred dir will be "hidden" by the mount.
-      # Also, permissions and owner must be set *after* the gluster dir 
-      # is mounted for the same reason -- see below.
-      out="$(ssh -oStrictHostKeyChecking=no root@$node \
-	"mount $BRICK_DIR 2>&1")" # mount via fstab
-      (( $? != 0 )) && {
-        display "ERROR: $node: mount $BRICK_DIR: $out" $LOG_FORCE; exit 16; }
-      display "append fstab: $out" $LOG_DEBUG
-
-      out="$(ssh -oStrictHostKeyChecking=no root@$node \
-	"mkdir -p $MAPRED_SCRATCH_DIR 2>&1")"
-      (( $? != 0 )) && {
-        display "ERROR: $node: mkdir $MAPRED_SCRATCH_DIR: $out" $LOG_FORCE;
-        exit 17; }
-      display "mkdir $MAPRED_SCRATCH_DIR: $out" $LOG_DEBUG
+  for node in "${HOSTS[@]}"; do
+      xfs_brick_dirs_mnt "$node"
   done
 
   # 6) create trusted pool from first node
@@ -765,76 +880,29 @@ function setup(){
   # 13) chown on the gluster mnt and mapred scratch dir on every node
   display "  -- on all nodes:"                      $LOG_INFO
   display "       mount $GLUSTER_MNT..."            $LOG_INFO
-  display "       create M/R directories..."        $LOG_INFO
   display "       create users and group as needed..." $LOG_INFO
+  display "       create M/R directories..."        $LOG_INFO
   display "       change owner and permissions..."  $LOG_INFO
   # Note: ownership and permissions must be set *afer* the gluster vol is
   #       mounted.
   for node in "${HOSTS[@]}"; do
       display "-- $node -- mount vol and create $HADOOP_G group" $LOG_INFO
-
-      # mount vol via fstab
-      out="$(ssh -oStrictHostKeyChecking=no root@$node \
-		"mount $GLUSTER_MNT 2>&1")" # from fstab
-      (( $? != 0 )) && {
-	display "ERROR: $node: mount $GLUSTER_MNT: $out" $LOG_FORCE;
-	exit 21; }
-      display "mount $GLUSTER_MNT: $out" $LOG_DEBUG
-      verify_gluster_mnt $node  # important for chmod/chown below
-
-      # create hadoop group, if needed
-      out="$(ssh -oStrictHostKeyChecking=no root@$node "
-        if ! getent group $HADOOP_G >/dev/null ; then
-          groupadd --system $HADOOP_G 2>&1 # note: no password
-        fi")"
-      (( $? != 0 )) && {
-	display "ERROR: $node: groupadd $HADOOP_G: $out" $LOG_FORCE; exit 23; }
-      display "groupadd $HADOOP_G: $out" $LOG_DEBUG
+      mount_volume "$node"
+      create_hadoop_group "$node" "$HADOOP_G"
   done
-
   # validate consistent hadoop group GID across cluster
   verify_hadoop_gid "$HADOOP_G"
 
   for node in "${HOSTS[@]}"; do
       display "-- $node -- create users" $LOG_INFO
-
-      # create the required M/R-YARN users, if needed
-      for user in "${MR_USERS[@]}" ; do
-	out="$(ssh -oStrictHostKeyChecking=no root@$node "
-		if ! getent passwd $user >/dev/null ; then
- 		  useradd --system -g $HADOOP_G $user 2>&1
-		fi
-	       ")"
-	(( $? != 0 )) && {
-	  display "ERROR: $node: useradd $user: $out" $LOG_FORCE;
-	  exit 25; }
-	display "useradd $user: $out" $LOG_DEBUG
-      done
+      create_hadoop_users "$node" "$HADOOP_G" MR_USERS[@] # last arg is by-name!
   done
-
   # validate consistent m/r-yarn user IDs across cluster
   verify_user_uids ${MR_USERS[@]}
 
   for node in "${HOSTS[@]}"; do
       display "-- $node -- create hadoop directories" $LOG_INFO
-
-      # create all of the M/R-YARN dirs with correct perms and owner
-      for (( i=0 ; i<${#MR_DIRS[@]} ; i++ )) ; do
-	dir="${MR_DIRS[$i]}"
-	# prepend gluster mnt unless dir name is an absolute pathname
-	[[ "${dir:0:1}" != '/' ]] && dir="$GLUSTER_MNT/$dir"
-	perm="${MR_PERMS[$i]}"
-	owner="${MR_OWNERS[$i]}"
-	out="$(ssh -oStrictHostKeyChecking=no root@$node "
-		mkdir -p $dir 2>&1     && \
-		chmod $perm $dir 2>&1  && \
-		chown $owner:$HADOOP_G $dir 2>&1
-	       ")"
-	(( $? != 0 )) && {
-	  display "ERROR: $node: mkdir/chmod/chown on $dir: $out" $LOG_FORCE;
-	  exit 27; }
-	display "mkdir/chmod/chown on $dir: $out" $LOG_DEBUG
-      done
+      create_hadoop_dirs "$node"
   done
 }
 
@@ -1049,6 +1117,14 @@ echo
 # flag if we're doing an rhs related install, set before parsing args
 [[ -d glusterfs ]] && RHS_INSTALL=false || RHS_INSTALL=true
 
+# define global assoc array indicating which feature, if any, to skip
+declare -A SKIP=() # default is not skip any tasks/features
+SKIP[report]=false
+SKIP[install_nodes]=false
+SKIP[clean]=false
+SKIP[setup]=false
+SKIP[perf]=false
+
 parse_cmd $@
 
 display "$(date). Begin: $SCRIPT -- version $INSTALL_VER ***" $LOG_REPORT
@@ -1063,39 +1139,42 @@ SUBDIRS="$(find ./* -type d -not -path "*/devutils")" # exclude devutils/
 SUBDIRS=${SUBDIRS//$'\n'/ } # replace newline with space
 
 echo
-display "-- Verifying the deploy environment, including the \"hosts\" file format:" $LOG_INFO
+display "-- Verifying deployment environment, including the \"hosts\" file format:" $LOG_INFO
 verify_local_deploy_setup
 firstNode=${HOSTS[0]}
 
-report_deploy_values
+[[ "${SKIP[report]}" == false ]] && report_deploy_values
 
 # per-node install and config...
-install_nodes
+[[ "${SKIP[install_nodes]}" == false ]] && install_nodes
 
 echo
 display '----------------------------------------' $LOG_SUMMARY
 display '--    Begin cluster configuration     --' $LOG_SUMMARY
 display '----------------------------------------' $LOG_SUMMARY
+echo
 
 # clean up mounts and volume from previous run, if any...
-if [[ $NEW_DEPLOY == true ]] ; then
-  echo
+if [[ "${SKIP[clean]}" == false ]] ; then
   display "-- Cleaning up (un-mounting, deleting volume, etc.)" $LOG_SUMMARY
   cleanup
 fi
 
 # set up mounts and create volume
 echo
-display "-- Setting up brick and volume mounts, creating and starting volume" \
-	$LOG_SUMMARY
-setup
+if [[ "${SKIP[setup]}" == false ]] ; then
+  display "-- Setting up brick and volume mounts, creating and starting volume" $LOG_SUMMARY
+  setup
+fi
 
 echo
-display "-- Performance config..." $LOG_SUMMARY
-perf_config
+if [[ "${SKIP[perf]}" == false ]] ; then
+  display "-- Performance config..." $LOG_SUMMARY
+  perf_config
+fi
 
 # reboot nodes if needed
-reboot_nodes
+[[ "${SKIP[install_nodes]}" == false ]] && reboot_nodes
 
 echo
 display "**** This script can be re-run anytime! ****" $LOG_REPORT

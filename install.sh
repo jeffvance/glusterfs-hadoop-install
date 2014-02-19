@@ -23,7 +23,7 @@
 
 # set global variables
 SCRIPT=$(basename $0)
-INSTALL_VER='0.70'   # self version
+INSTALL_VER='0.71'   # self version
 INSTALL_DIR=$PWD     # name of deployment (install-from) dir
 INSTALL_FROM_IP=($(hostname -I))
 INSTALL_FROM_IP=${INSTALL_FROM_IP[$(( ${#INSTALL_FROM_IP[@]}-1 ))]} # last ntry
@@ -125,7 +125,7 @@ EOF
 function parse_cmd(){
 
   local OPTIONS='vhqy'
-  local LONG_OPTS='brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,help,version,quiet,debug,clean,dirs,users'
+  local LONG_OPTS='brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,help,version,quiet,debug,clean,mkdirs,users'
 
   # defaults (global variables)
   BRICK_DIR='/mnt/brick1'
@@ -196,7 +196,7 @@ function parse_cmd(){
 	    SKIP[perf]=true
 	    shift; continue
 	;;
-	--dirs)
+	--mkdirs)
 	    SKIP[report]=true
 	    SKIP[install_nodes]=true
 	    SKIP[clean]=true
@@ -406,8 +406,8 @@ function verify_peer_detach(){
   local out; local i=0; local SLEEP=2; local LIMIT=$((NUMNODES * 2))
 
   while (( i < LIMIT )) ; do # don't loop forever
-      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode \
-	"gluster peer status")" # "Number of Peers: x"
+      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+	gluster peer status")" # "Number of Peers: x"
       [[ $? == 0 && -n "$out" && ${out##*: } == 0 ]] && break
       sleep $SLEEP 
       ((i++))
@@ -434,8 +434,8 @@ function verify_pool_created(){
 
   while (( i < LIMIT )) ; do # don't loop forever
       # out contains lines where the state != desired state, == problem
-      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode \
-	   gluster peer status|grep 'State: ')"
+      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+	   gluster peer status|grep 'State: '")"
       if [[ -n "$out" ]] ; then # have all State: lines else unexpected output
         out="$(grep -v "$DESIRED_STATE" <<<$out)"
         [[ -z "$out" ]] && break # empty -> all nodes in desired state
@@ -464,8 +464,8 @@ function verify_vol_created(){
   local i=0; local SLEEP=2; local LIMIT=$((NUMNODES * 5))
 
   while (( i < LIMIT )) ; do # don't loop forever
-      ssh -oStrictHostKeyChecking=no root@$firstNode \
-	"gluster volume info $VOLNAME >& /dev/null"
+      ssh -oStrictHostKeyChecking=no root@$firstNode "
+	gluster volume info $VOLNAME >& /dev/null"
       (( $? == 0 )) && break
       sleep $SLEEP
       ((i++))
@@ -500,8 +500,7 @@ function verify_vol_started(){
 	gluster volume status $VOLNAME detail 2>/dev/null |
 	 	grep $FILTER |
 		grep -v '$ONLINE' |
-		wc -l
-	")"
+		wc -l")"
       (( rtn == 0 )) && break # exit loop
       sleep $SLEEP
       ((i++))
@@ -524,8 +523,8 @@ function verify_gluster_mnt(){
   local node=$1 # required
   local out
 
-  out="$(ssh -oStrictHostKeyChecking=no root@$node \
-	"grep $GLUSTER_MNT /proc/mounts 2>&1")"
+  out="$(ssh -oStrictHostKeyChecking=no root@$node "
+	grep $GLUSTER_MNT /proc/mounts 2>&1")"
   if (( $? != 0 )) ; then
     display "ERROR: $GLUSTER_MNT *NOT* mounted" $LOG_FORCE
     exit 27
@@ -538,20 +537,15 @@ function verify_gluster_mnt(){
 # 2) stop vol if started **
 # 3) delete vol if created **
 # 4) detach nodes if trusted pool created
-# 5) kill gluster processes
-# 6) rm vol_mnt
-# 7) unmount brick_mnt if xfs mounted
-# 8) rm brick_mnt; rm mapred scratch dir
+# 5) rm vol_mnt
+# 6) unmount brick_mnt if xfs mounted
+# 7) rm brick_mnt; rm mapred scratch dir
 # ** gluster cmd only done once for entire pool; all other cmds executed on
 #    each node
 #
 function cleanup(){
 
   local node=''; local out; local err
-
-  # 0) start glusterd service on firstNode in case it's been stopped.
-  #    Needed for detach.
-  out="$(ssh -oStrictHostKeyChecking=no root@$firstNode service glusterd start)"
 
   # 1) umount vol on every node, if mounted
   display "  -- un-mounting $GLUSTER_MNT on all nodes..." $LOG_INFO
@@ -565,9 +559,9 @@ function cleanup(){
 
   # 2) stop vol on a single node, if started
   # 3) delete vol on a single node, if created
-  display "  -- from node $firstNode:"         $LOG_INFO
-  display "       stopping $VOLNAME volume..." $LOG_INFO
-  display "       deleting $VOLNAME volume..." $LOG_INFO
+  display "  -- on node $firstNode (distributed):" $LOG_INFO
+  display "       stopping $VOLNAME volume..."     $LOG_INFO
+  display "       deleting $VOLNAME volume..."     $LOG_INFO
   out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
       gluster volume status $VOLNAME >& /dev/null
       if (( \$? == 0 )); then # assume volume started
@@ -576,8 +570,7 @@ function cleanup(){
       gluster volume info $VOLNAME >& /dev/null
       if (( \$? == 0 )); then # assume volume created
         gluster --mode=script volume delete $VOLNAME 2>&1
-      fi
-  ")"
+      fi")"
   display "vol stop/delete: $out" $LOG_DEBUG
 
   # 4) detach nodes if trusted pool created, on all but first node
@@ -598,17 +591,16 @@ function cleanup(){
     verify_peer_detach
   fi
 
-  # 5) kill gluster processes on firstNode, restarted at end of function
-  display " -- from node $firstNode: kill gluster processes..." $LOG_INFO
+  # 5) rm distributed vol_mnt
+  display "  -- on node $firstNode (distributed):" $LOG_INFO
+  display "       rm $GLUSTER_MNT..."              $LOG_INFO
   out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	killall glusterd glusterfs glusterfsd 2>&1")"
-  display "killall gluster: $out" $LOG_DEBUG
+	rm -rf $GLUSTER_MNT 2>&1")"
+  display "rm $GLUSTER_MNT: $out" $LOG_DEBUG
 
-  # 6) rm vol_mnt on every node
-  # 7) unmount brick_mnt on every node, if xfs mounted
-  # 8) rm brick_mnt and mapred scratch dir on every node
+  # 6) unmount brick_mnt on every node, if xfs mounted
+  # 7) rm brick_mnt and mapred scratch dir on every node
   display "  -- on all nodes:"          $LOG_INFO
-  display "       rm $GLUSTER_MNT..."   $LOG_INFO
   display "       umount $BRICK_DIR..." $LOG_INFO
   display "       rm $BRICK_DIR..."     $LOG_INFO
   out=''
@@ -618,19 +610,10 @@ function cleanup(){
           if grep -qs $BRICK_DIR /proc/mounts ; then
             umount $BRICK_DIR 2>&1
           fi
-          rm -rf $BRICK_DIR 2>&1
-      ")"
+          rm -rf $BRICK_DIR 2>&1")"
       out+="\n"
   done
-
-  out="$(ssh -oStrictHostKeyChecking=no root@$firstNode service glusterd start)"
-  err=$?
-  if (( err != 0 )) ; then
-    display "ERROR $err: cannot start glusterd: $out" $LOG_FORCE
-    exit 30
-  fi
-
-  display "rm vol_mnt, umount brick, rm brick: $out" $LOG_DEBUG
+  display "umount/rm $BRICK_DIR: $out" $LOG_DEBUG
 }
 
 # create_trusted_pool: create the trusted storage pool. No error if the pool
@@ -780,12 +763,12 @@ function create_hadoop_users(){
   done
 }
 
-# create_hadoop_dirs: create all the directories needed for typical hadoop jobs.
-# Also, assign the correct owners and permissions to each directory.
+# create_hadoop_dirs: from the firstNode, create all the distributed
+# directories needed for typical hadoop jobs. Also, assign the correct owners
+# and permissions to each directory.
 #
 function create_hadoop_dirs(){
 
-  local node="$1"
   local i; local out; local dir; local owner; local perm
 
   local YARN_NM_REMOTE_APP_LOG_DIR='tmp/logs'
@@ -808,12 +791,12 @@ function create_hadoop_dirs(){
       [[ "${dir:0:1}" != '/' ]] && dir="$GLUSTER_MNT/$dir"
       perm="${MR_PERMS[$i]}"
       owner="${MR_OWNERS[$i]}"
-      out="$(ssh -oStrictHostKeyChecking=no root@$node "
+      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
 	     mkdir -p $dir 2>&1     && \
 	     chmod $perm $dir 2>&1  && \
 	     chown $owner:$HADOOP_G $dir 2>&1")"
       (( $? != 0 )) && {
-	display "ERROR: $node: mkdir/chmod/chown on $dir: $out" $LOG_FORCE;
+	display "ERROR: $firstNode: mkdir/chmod/chown on $dir: $out" $LOG_FORCE;
 	exit 61; }
       display "mkdir/chmod/chown on $dir: $out" $LOG_DEBUG
   done
@@ -833,9 +816,9 @@ function create_hadoop_dirs(){
 #  9) mount vol
 #  10) create the mapred and yarn users, and the hadoop group
 #  11) create distributed mapred/system and mr-history/done dirs (must be done
-#      after the vol mount)
-#  12) chmod gluster mnt, mapred/system and brick1/mapred scratch dir
-#  13) chown to mapred:hadoop the above
+#      after the vol mount) **
+#  12) chmod gluster mnt, mapred/system and brick1/mapred scratch dir **
+#  13) chown to mapred:hadoop the above **
 # ** gluster cmd only done once for entire pool; all other cmds executed on
 #    each node
 # NOTE: the SKIP variable controls which features of setup() are done.
@@ -876,7 +859,7 @@ function setup(){
     # 7) create vol on a single node
     # 8) start vol on a single node
     # 9) mount vol on every node
-    display "  -- from node $firstNode:"              $LOG_INFO
+    display "  -- on $firstNode node (distributed):"  $LOG_INFO
     display "       creating trusted pool..."         $LOG_INFO
     display "       creating $VOLNAME volume..."      $LOG_INFO
     display "       starting $VOLNAME volume..."      $LOG_INFO
@@ -922,16 +905,13 @@ function setup(){
   fi
 
   if [[ "${SKIP[setup.dirs]}" == false ]] ; then
-    # 11) create distributed mapred/system and mr-history/done dirs on each node
-    # 12) chmod on the gluster mnt and the mapred scracth dir on every node
-    # 13) chown on the gluster mnt and mapred scratch dir on every node
-    display "  -- on all nodes:"                     $LOG_INFO
+    # 11) create distributed mapred/system and mr-history/done dirs
+    # 12) chmod on the gluster mnt and the mapred scracth dir
+    # 13) chown on the gluster mnt and mapred scratch dir
+    display "  -- on $firstNode node (distributed):" $LOG_INFO
     display "       create hadoop directories..."    $LOG_INFO
     display "       change owner and permissions..." $LOG_INFO
-    for node in "${HOSTS[@]}"; do
-	display "-- $node -- create hadoop directories" $LOG_INFO
-	create_hadoop_dirs "$node"
-    done
+    create_hadoop_dirs
   fi
 }
 

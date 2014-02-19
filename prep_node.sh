@@ -126,6 +126,7 @@ function validate_ntp_conf(){
   fi
 
   for timeserver in "${servers[@]}" ; do
+      display "   attempting ntpdate on $timeserver..." $LOG_DEBUG
       ntpdate -q $timeserver >& /dev/null
       (( $? == 0 )) && break # exit loop, found valid time-server
       ((i+=1))

@@ -23,7 +23,7 @@
 
 # set global variables
 SCRIPT=$(basename $0)
-INSTALL_VER='0.72'   # self version
+INSTALL_VER='0.73'   # self version
 INSTALL_DIR=$PWD     # name of deployment (install-from) dir
 INSTALL_FROM_IP=($(hostname -I))
 INSTALL_FROM_IP=${INSTALL_FROM_IP[$(( ${#INSTALL_FROM_IP[@]}-1 ))]} # last ntry
@@ -533,13 +533,12 @@ function verify_gluster_mnt(){
 }
 
 # cleanup:
-# 1) umount vol if mounted
-# 2) stop vol if started **
-# 3) delete vol if created **
-# 4) detach nodes if trusted pool created
-# 5) rm vol_mnt
+# 1) delete all files/dirs under volume mount **
+# 2) stop vol **
+# 3) delete vol **
+# 4) detach nodes
+# 5) umount vol if mounted
 # 6) unmount brick_mnt if xfs mounted
-# 7) rm brick_mnt; rm mapred scratch dir
 # ** gluster cmd only done once for entire pool; all other cmds executed on
 #    each node
 #
@@ -547,73 +546,52 @@ function cleanup(){
 
   local node=''; local out; local err
 
-  # 1) umount vol on every node, if mounted
-  display "  -- un-mounting $GLUSTER_MNT on all nodes..." $LOG_INFO
-  for node in "${HOSTS[@]}"; do
-      out="$(ssh -oStrictHostKeyChecking=no root@$node "
-          if grep -qs $GLUSTER_MNT /proc/mounts ; then
-            umount $GLUSTER_MNT
-          fi")"
-      [[ -n "$out" ]] && display "$node: umount: $out" $LOG_DEBUG
-  done
+  display "**Note: gluster \"cleanup\" errors below may be ignored if the $VOLNAME volume" $LOG_INFO
+  display "  has not been created or started, etc." $LOG_INFO
 
-  # 2) stop vol on a single node, if started
-  # 3) delete vol on a single node, if created
+  # 1) delete all files/dirs under volume mount (distributed) 
+  #    before tearing down the trusted pool
+  # 2) stop vol (distributed)
+  # 3) delete vol (distributed)
   display "  -- on node $firstNode (distributed):" $LOG_INFO
+  display "       rm $GLUSTER_MNT..."              $LOG_INFO
   display "       stopping $VOLNAME volume..."     $LOG_INFO
   display "       deleting $VOLNAME volume..."     $LOG_INFO
   out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-      gluster volume status $VOLNAME >& /dev/null
-      if (( \$? == 0 )); then # assume volume started
-        gluster --mode=script volume stop $VOLNAME 2>&1
-      fi
-      gluster volume info $VOLNAME >& /dev/null
-      if (( \$? == 0 )); then # assume volume created
-        gluster --mode=script volume delete $VOLNAME 2>&1
-      fi")"
-  display "vol stop/delete: $out" $LOG_DEBUG
+	rm -rf $GLUSTER_MNT 2>&1
+	gluster --mode=script volume stop $VOLNAME 2>&1
+	gluster --mode=script volume delete $VOLNAME 2>&1")"
+  display "gluster results: $out" $LOG_DEBUG
 
-  # 4) detach nodes if trusted pool created, on all but first node
-  display "       detach all nodes..."   $LOG_INFO
-  out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	gluster peer status|head -n 1")"
-  # detach nodes if a pool has been already been formed
-  if [[ -n "$out" && ${out##* } > 0 ]] ; then # got output, last tok=# peers
-    display "  -- from node $firstNode:" $LOG_INFO
-    display "       detaching all other nodes from trusted pool..." $LOG_INFO
-    out=''
-    for (( i=1; i<$NUMNODES; i++ )); do
+  # 4) detach nodes on all but firstNode
+  display "  -- from node $firstNode:" $LOG_INFO
+  display "       detaching all other nodes from trusted pool..." $LOG_INFO
+  out=''
+  for (( i=1; i<$NUMNODES; i++ )); do # starting at 1 not 0
       out+="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
 	gluster peer detach ${HOSTS[$i]} 2>&1")"
       out+="\n"
-    done
-    display "peer detach: $out" $LOG_DEBUG
-    verify_peer_detach
-  fi
+  done
+  display "peer detach: $out" $LOG_DEBUG
+  verify_peer_detach
 
-  # 5) rm distributed vol_mnt
-  display "  -- on node $firstNode (distributed):" $LOG_INFO
-  display "       rm $GLUSTER_MNT..."              $LOG_INFO
-  out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	rm -rf $GLUSTER_MNT 2>&1")"
-  display "rm $GLUSTER_MNT: $out" $LOG_DEBUG
-
+  # 5) umount vol on every node, if mounted
   # 6) unmount brick_mnt on every node, if xfs mounted
-  # 7) rm brick_mnt and mapred scratch dir on every node
-  display "  -- on all nodes:"          $LOG_INFO
-  display "       umount $BRICK_DIR..." $LOG_INFO
-  display "       rm $BRICK_DIR..."     $LOG_INFO
+  display "  -- on all nodes:"            $LOG_INFO
+  display "       umount $GLUSTER_MNT..." $LOG_INFO
+  display "       umount $BRICK_DIR..."   $LOG_INFO
   out=''
   for node in "${HOSTS[@]}"; do
       out+="$(ssh -oStrictHostKeyChecking=no root@$node "
-          rm -rf $GLUSTER_MNT 2>&1
+          if grep -qs $GLUSTER_MNT /proc/mounts ; then
+            umount $GLUSTER_MNT
+          fi
           if grep -qs $BRICK_DIR /proc/mounts ; then
             umount $BRICK_DIR 2>&1
-          fi
-          rm -rf $BRICK_DIR 2>&1")"
+          fi")"
       out+="\n"
   done
-  display "umount/rm $BRICK_DIR: $out" $LOG_DEBUG
+  display "umount $GLUSTER_MNT & $BRICK_DIR: $out" $LOG_DEBUG
 }
 
 # create_trusted_pool: create the trusted storage pool. No error if the pool

@@ -554,11 +554,11 @@ function cleanup(){
   # 2) stop vol (distributed)
   # 3) delete vol (distributed)
   display "  -- on node $firstNode (distributed):" $LOG_INFO
-  display "       rm $GLUSTER_MNT..."              $LOG_INFO
+  display "       rm $GLUSTER_MNT/*..."            $LOG_INFO
   display "       stopping $VOLNAME volume..."     $LOG_INFO
   display "       deleting $VOLNAME volume..."     $LOG_INFO
   out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	rm -rf $GLUSTER_MNT 2>&1
+	rm -rf $GLUSTER_MNT/* 2>&1
 	gluster --mode=script volume stop $VOLNAME 2>&1
 	gluster --mode=script volume delete $VOLNAME 2>&1")"
   display "gluster results: $out" $LOG_DEBUG

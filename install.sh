@@ -544,7 +544,21 @@ function verify_gluster_mnt(){
 #
 function cleanup(){
 
-  local node=''; local out; local err
+  local node=''; local out; local ans='y'
+
+  if [[ "$ANS_YES" == 'n' ]] ; then
+    echo
+    echo "The next step is to delete all files under $GLUSTER_MNT/ across the"
+    echo "cluster, and to delete the gluster volume."
+    echo "Answering yes will remove ALL files in the $VOLNAME volume!" 
+    read -p "Continue? [y|N] " ans
+    echo
+  fi
+  case $ans in
+    y|yes|Y|YES|Yes) # ok, continue
+    ;;
+    *) exit 0
+  esac
 
   display "**Note: gluster \"cleanup\" errors below may be ignored if the $VOLNAME volume" $LOG_INFO
   display "  has not been created or started, etc." $LOG_INFO

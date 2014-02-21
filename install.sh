@@ -23,7 +23,7 @@
 
 # set global variables
 SCRIPT=$(basename $0)
-INSTALL_VER='0.73'   # self version
+INSTALL_VER='0.74'   # self version
 INSTALL_DIR=$PWD     # name of deployment (install-from) dir
 INSTALL_FROM_IP=($(hostname -I))
 INSTALL_FROM_IP=${INSTALL_FROM_IP[$(( ${#INSTALL_FROM_IP[@]}-1 ))]} # last ntry
@@ -532,7 +532,8 @@ function verify_gluster_mnt(){
   display "$GLUSTER_MNT mounted: $out" $LOG_DEBUG
 }
 
-# cleanup:
+# cleanup: do the following steps (order matters), but prompt for confirmation
+# before removing files under the gluster mount.
 # 1) delete all files/dirs under volume mount **
 # 2) stop vol **
 # 3) delete vol **

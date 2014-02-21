@@ -14,7 +14,7 @@ LOG_FORCE=99  # force write regardless of VERBOSE setting
 
 # display: append the passed-in message to localhost's logfile, and potentially
 # write the message to stdout, depending on the value of the passed-in priority
-# setting.
+# setting. A timestamp is prepending (only) to the logfile msg.
 # NOTE: $LOGFILE should be defined if logging is desired.
 # NOTE: $VERBOSE should be defined if "threshold" echos are desired.
 #   $1=msg,
@@ -27,7 +27,7 @@ function display(){
   local log=${3:-$LOGFILE}
   local verbose=${VERBOSE:-$LOG_DEBUG}
 
-  [[ -n "$log" ]] && echo "$1" >> $log
+  [[ -n "$log" ]] && echo "[$(date +%T)] $1" >> $log
   (( pri >= verbose )) && echo -e "$1"
 }
 

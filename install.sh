@@ -82,8 +82,8 @@ in the local "hosts" file must include a brick-dev-path.
 EOF
   short_usage
   cat <<EOF
-  brick-dev          : Brick device location/directory where the XFS file system
-                       is created. Eg. /dev/vgName/lvName.
+  brick-dev          : Brick device path where the XFS file system is created.
+                       Eg. /dev/vgName/lvName.
   --brick_mnt <path> : Brick directory. Default: "/mnt/brick1/<volname>".
   --vol-name  <name> : Gluster volume name. Default: "HadoopVol".
   --vol-mnt   <path> : Gluster mount point. Default: "/mnt/glusterfs".

@@ -23,7 +23,7 @@
 
 # set global variables
 SCRIPT=$(basename $0)
-INSTALL_VER='0.74'   # self version
+INSTALL_VER='0.75'   # self version
 INSTALL_DIR=$PWD     # name of deployment (install-from) dir
 INSTALL_FROM_IP=($(hostname -I))
 INSTALL_FROM_IP=${INSTALL_FROM_IP[$(( ${#INSTALL_FROM_IP[@]}-1 ))]} # last ntry
@@ -55,12 +55,13 @@ $SCRIPT [--brick-mnt <path>] [--vol-name <name>]  [--vol-mnt <path>]
            [--replica <num>]    [--hosts <path>]     [--mgmt-node <node>]
            [--logfile <path>]   [-y]
            [--verbose [num] ]   [-q|--quiet]         [--debug]
-           brick-dev
+           [brick-dev]
 
 EOF
 }
 
 # usage: write full usage/help text to stdout.
+# Note: the --mkdirs, --users, --clean options are not yet documented.
 #
 function usage(){
 
@@ -70,23 +71,19 @@ Usage:
 
 Prepares a glusterfs volume for Hadoop workloads. Note that hadoop itself is not
 installed by these scripts. The user is expected to install hadoop separately.
-Each node in the storage cluster must be defined in the "hosts" file. The
-"hosts" file is not included and must be created prior to running this script.
-The "hosts" file format is:
-   hostname  host-ip-address
-repeated one host per line in replica pair order. See the "hosts.example"
-sample hosts file for more information.
+Each node in the storage cluster must be defined in the local "hosts" file. The
+"hosts" file must be created prior to running this script. The "hosts" file
+format is described in the included hosts.example file.
   
-The required brick-dev argument names the brick device where the XFS file
-system will be mounted. Examples include: /dev/<VGname>/<LVname> or /dev/vdb1,
-etc. The brick-dev names a RAID6 storage partition dedicated for RHS. Optional
-arguments can specify the RHS volume name and mount point, brick mount point,
-etc.
+The brick-dev argument names the brick device where the XFS file system will be
+mounted. Examples include: /dev/<VGname>/<LVname> or /dev/vdb1, etc. The brick-
+dev names a RAID6 storage partition. If the brick-dev is omitted then each line
+in the local "hosts" file must include a brick-dev-path.
 EOF
   short_usage
   cat <<EOF
-  brick-dev          : (required) Brick device location/directory where the
-                       XFS file system is created. Eg. /dev/vgName/lvName.
+  brick-dev          : Brick device location/directory where the XFS file system
+                       is created. Eg. /dev/vgName/lvName.
   --brick_mnt <path> : Brick directory. Default: "/mnt/brick1/<volname>".
   --vol-name  <name> : Gluster volume name. Default: "HadoopVol".
   --vol-mnt   <path> : Gluster mount point. Default: "/mnt/glusterfs".
@@ -115,9 +112,8 @@ EOF
 EOF
 }
 
-# parse_cmd: getopt is used to do general parsing. The brick-dev arg is
-# required. The remaining parms are optional. See usage function for syntax. 
-# The RHS_INSTALL variable must be set prior to calling this function.
+# parse_cmd: getopt is used to do general parsing. See the usage() function for
+# syntax.  The RHS_INSTALL variable must be set prior to calling this function.
 # Note: since the logfile path is an option, parsing errors may be written to
 #   the default logfile rather than the user-defined logfile, depending on when
 #   the error occurs.
@@ -227,13 +223,12 @@ function parse_cmd(){
   done
 
   eval set -- "$@" # move arg pointer so $1 points to next arg past last opt
-  (( $# == 0 )) && {
-        echo "Brick device parameter is required"; short_usage; exit -1; }
   (( $# > 1 )) && {
         echo "Too many parameters: $@"; short_usage; exit -1; }
 
-  # the brick dev is the only required parameter
-  BRICK_DEV="$1"
+  # the brick dev is the only non-option parameter and is required unless 
+  # provided in the local hosts file
+  (( $# == 1 )) && BRICK_DEV="$1"
 
   # validate replica cnt for RHS
   (( REPLICA_CNT != 2 )) && {
@@ -254,7 +249,7 @@ function report_deploy_values(){
   local ans='y'
   local OS_RELEASE='/etc/redhat-release'
   local RHS_RELEASE='/etc/redhat-storage-release'
-  local OS; local RHS
+  local OS; local RHS; local report_brick
 
   # report_gluster_versions: sub-function to report either the common gluster
   # version across all nodes, or to list each node and its gluster version.
@@ -305,6 +300,13 @@ function report_deploy_values(){
 	fi")"
   fi
 
+  # report brick-dev
+  if [[ -n "$BRICK_DEV" ]] ; then # passed as cmdline arg
+    report_brick="$BRICK_DEV"
+  else
+    report_brick="${BRICKS[@]}"
+  fi
+
   display
   display "OS:                   $OS" $LOG_REPORT
   [[ -n "$RHS" ]] &&
@@ -324,10 +326,9 @@ function report_deploy_values(){
   display "  Volume name:        $VOLNAME"          $LOG_REPORT
   display "  # of replicas:      $REPLICA_CNT"      $LOG_REPORT
   display "  Volume mount:       $GLUSTER_MNT"      $LOG_REPORT
-  display "  XFS device file:    $BRICK_DEV"        $LOG_REPORT
+  display "  XFS device path(s)  $report_brick"     $LOG_REPORT
   display "  XFS brick dir:      $BRICK_DIR"        $LOG_REPORT
   display "  XFS brick mount:    $BRICK_MNT"        $LOG_REPORT
-  display "  M/R scratch dir:    $MAPRED_SCRATCH_DIR"  $LOG_REPORT
   display "  Verbose:            $VERBOSE"          $LOG_REPORT
   display "  Log file:           $LOGFILE"          $LOG_REPORT
   display    "_______________________________________" $LOG_REPORT
@@ -630,7 +631,7 @@ function create_trusted_pool(){
   display "peer status: $out" $LOG_DEBUG
 }
 
-# xfs_brick_dirs_mnt: invoked by setup(). On the passed-in node:
+# xfs_brick_dirs_mnt: invoked by setup(). For each hosts do:
 #   mkfs.xfs brick_dev on every node
 #   mkdir brick_dir and vol_mnt on every node
 #   append brick_dir and gluster mount entries to fstab on every node
@@ -640,59 +641,66 @@ function create_trusted_pool(){
 #
 function xfs_brick_dirs_mnt(){
 
-  local node="$1"; local out
+  local out; local i; local node; local brick
+  local BRICK_MNT_OPTS="noatime,inode64"
+  local GLUSTER_MNT_OPTS="entry-timeout=0,attribute-timeout=0,use-readdirp=no,acl,_netdev"
 
-  # mkfs.xfs
-  out="$(ssh -oStrictHostKeyChecking=no root@$node "
-	mkfs -t xfs -i size=512 -f $BRICK_DEV 2>&1")"
-  (( $? != 0 )) && {
-    display "ERROR: $node: mkfs.xfs: $out" $LOG_FORCE; exit 33; }
-  display "mkfs.xfs: $out" $LOG_DEBUG
+  for (( i=0 ; i<$NUMNODES ; i++ )) ; do
+      node=${HOSTS[$i]}
+      [[ -n "$BRICK_DEV" ]] && brick="$BRICK_DEV" || brick="${BRICKS[$i]}"
+      # mkfs.xfs
+      out="$(ssh -oStrictHostKeyChecking=no root@$node "
+	    mkfs -t xfs -i size=512 -f "$brick" 2>&1")"
+      if (( $? != 0 )) ; then
+	display "ERROR: $node: mkfs.xfs on brick $brick: $out" $LOG_FORCE
+	exit 33
+      fi
+      display "mkfs.xfs on $brick: $out" $LOG_DEBUG
 
-  # use volname dir under brick by convention
-  out="$(ssh -oStrictHostKeyChecking=no root@$node "
-	mkdir -p $BRICK_MNT 2>&1")"
-  (( $? != 0 )) && {
-    display "ERROR: $node: mkdir $BRICK_MNT: $out" $LOG_FORCE; exit 36; }
-  display "mkdir $BRICK_MNT: $out" $LOG_DEBUG
+      out="$(ssh -oStrictHostKeyChecking=no root@$node "
+	    mkdir -p $BRICK_MNT 2>&1")"
+      (( $? != 0 )) && {
+	display "ERROR: $node: mkdir $BRICK_MNT: $out" $LOG_FORCE; exit 36; }
+      display "mkdir $BRICK_MNT: $out" $LOG_DEBUG
 
-  # make vol mnt dir
-  out="$(ssh -oStrictHostKeyChecking=no root@$node "
-        mkdir -p $GLUSTER_MNT 2>&1")"
-  (( $? != 0 )) && {
-    display "ERROR: $node: mkdir $GLUSTER_MNT: $out" $LOG_FORCE; exit 39; }
-  display "mkdir $GLUSTER_MNT: $out" $LOG_DEBUG
+      # make vol mnt dir
+      out="$(ssh -oStrictHostKeyChecking=no root@$node "
+	    mkdir -p $GLUSTER_MNT 2>&1")"
+      (( $? != 0 )) && {
+	display "ERROR: $node: mkdir $GLUSTER_MNT: $out" $LOG_FORCE; exit 39; }
+      display "mkdir $GLUSTER_MNT: $out" $LOG_DEBUG
 
-  # append brick and gluster mounts to fstab
-  out="$(ssh -oStrictHostKeyChecking=no root@$node "
-        if ! grep -qs $BRICK_DIR /etc/fstab ; then
-          echo '$BRICK_DEV $BRICK_DIR xfs  $BRICK_MNT_OPTS  0 0' >>/etc/fstab
-        fi
-        if ! grep -qs $GLUSTER_MNT /etc/fstab ; then
-          echo '$node:/$VOLNAME  $GLUSTER_MNT  glusterfs  $GLUSTER_MNT_OPTS \
-		0 0' >>/etc/fstab
-        fi")"
-  (( $? != 0 )) && {
-    display "ERROR: $node: append fstab: $out" $LOG_FORCE; exit 42; }
-  display "append fstab: $out" $LOG_DEBUG
+      # append brick and gluster mounts to fstab
+      out="$(ssh -oStrictHostKeyChecking=no root@$node "
+	     if ! grep -qs $BRICK_DIR /etc/fstab ; then
+	       echo '$brick $BRICK_DIR xfs  $BRICK_MNT_OPTS  0 0' >>/etc/fstab
+	     fi
+	     if ! grep -qs $GLUSTER_MNT /etc/fstab ; then
+	       echo '$node:/$VOLNAME  $GLUSTER_MNT  glusterfs \
+		 $GLUSTER_MNT_OPTS 0 0' >>/etc/fstab
+	     fi")"
+      (( $? != 0 )) && {
+	display "ERROR: $node: append fstab: $out" $LOG_FORCE; exit 42; }
+      display "append fstab: $out" $LOG_DEBUG
 
-  # Note: mapred scratch dir must be created *after* the brick is
-  # mounted; otherwise, mapred dir will be "hidden" by the mount.
-  # Also, permissions and owner must be set *after* the gluster dir 
-  # is mounted for the same reason -- see below.
-  out="$(ssh -oStrictHostKeyChecking=no root@$node "
-	mount $BRICK_DIR 2>&1")" # mount via fstab
-  (( $? != 0 )) && {
-    display "ERROR: $node: mount $BRICK_DIR: $out" $LOG_FORCE; exit 45; }
-  display "append fstab: $out" $LOG_DEBUG
+      # Note: mapred scratch dir must be created *after* the brick is
+      # mounted; otherwise, mapred dir will be "hidden" by the mount.
+      # Also, permissions and owner must be set *after* the gluster dir 
+      # is mounted for the same reason.
+      out="$(ssh -oStrictHostKeyChecking=no root@$node "
+	    mount $brick 2>&1")" # mount via fstab
+      (( $? != 0 )) && {
+	display "ERROR: $node: mount $brick as $BRICK_DIR: $out" $LOG_FORCE;
+	exit 45; }
+      display "append fstab: $out" $LOG_DEBUG
 
-  out="$(ssh -oStrictHostKeyChecking=no root@$node "
+      out="$(ssh -oStrictHostKeyChecking=no root@$node "
 	mkdir -p $MAPRED_SCRATCH_DIR 2>&1")"
-  (( $? != 0 )) && {
-    display "ERROR: $node: mkdir $MAPRED_SCRATCH_DIR: $out" $LOG_FORCE;
-    exit 48; }
-
-  display "mkdir $MAPRED_SCRATCH_DIR: $out" $LOG_DEBUG
+      (( $? != 0 )) && {
+        display "ERROR: $node: mkdir $MAPRED_SCRATCH_DIR: $out" $LOG_FORCE;
+        exit 48; }
+      display "mkdir $MAPRED_SCRATCH_DIR: $out" $LOG_DEBUG
+  done
 }
 
 # mount_volume: on the passed-in node, mount the hadoop volume and verify that
@@ -821,8 +829,6 @@ function create_hadoop_dirs(){
 function setup(){
 
   local i=0; local node=''; local out; local err
-  local BRICK_MNT_OPTS="noatime,inode64"
-  local GLUSTER_MNT_OPTS="entry-timeout=0,attribute-timeout=0,use-readdirp=no,acl,_netdev"
   local dir; local perm; local owner; local uid
   local HBASE_U='hbase'
   local YARN_U='yarn'; local YARN_UID=502
@@ -838,13 +844,11 @@ function setup(){
     # 4) mount brick on every node
     # 5) mkdir mapredlocal scratch dir on every node (done after brick mount)
     display "  -- on all nodes:"                           $LOG_INFO
-    display "       mkfs.xfs $BRICK_DEV..."                $LOG_INFO
+    display "       mkfs.xfs on brick-device"              $LOG_INFO
     display "       mkdir $BRICK_DIR, $GLUSTER_MNT and $MAPRED_SCRATCH_DIR..." $LOG_INFO
     display "       append mount entries to /etc/fstab..." $LOG_INFO
     display "       mount $BRICK_DIR..."                   $LOG_INFO
-    for node in "${HOSTS[@]}"; do
-	xfs_brick_dirs_mnt "$node"
-    done
+    xfs_brick_dirs_mnt
   fi
 
   if [[ "${SKIP[setup.vol]}" == false ]] ; then
@@ -926,7 +930,7 @@ function setup(){
 #
 function install_nodes(){
 
-  local i; local node; local ip; local install_mgmt_node
+  local i; local node; local ip; local install_mgmt_node; local brick
   local LOCAL_PREP_LOG_DIR='/var/tmp/'; local out
   local FILES_TO_CP="$PREP_SH functions $SUBDIRS"
   REBOOT_NODES=() # global
@@ -939,11 +943,12 @@ function install_nodes(){
   # code is returned then this function exits.
   # Args: $1=hostname, $2=node's ip (can be hostname if ip is unknown),
   #       $3=flag to install storage node, $4=flag to install the mgmt node.
+  #       $5=brick-dev (or null)
   #
   function prep_node(){
 
-    local node="$1"; local ip="$2"
-    local install_storage="$3"; local install_mgmt="$4"
+    local node="$1"; local ip="$2" local install_storage="$3"
+    local install_mgmt="$4"; local brick="$5"
     local err; local ssh_target
     [[ $USING_DNS == true ]] && ssh_target=$node || ssh_target=$ip
 
@@ -966,7 +971,7 @@ function install_nodes(){
     #  are also a bit tricky to pass and receive. And remember values in an
     #  associative array cannot be arrays or other structures.
     # note: prep_node.sh may apply patches which require $node to be rebooted
-    declare -A PREP_ARGS=([BRICK_DEV]="$BRICK_DEV" [NODE]="$node" \
+    declare -A PREP_ARGS=([BRICK_DEV]="$brick" [NODE]="$node" \
 	[INST_STORAGE]="$install_storage" [INST_MGMT]="$install_mgmt" \
 	[MGMT_NODE]="$MGMT_NODE" [VERBOSE]="$VERBOSE" \
 	[PREP_LOG]="$PREP_NODE_LOG_PATH" [REMOTE_DIR]="$REMOTE_INSTALL_DIR" \
@@ -1002,6 +1007,7 @@ function install_nodes(){
   #      #
   for (( i=0; i<$NUMNODES; i++ )); do
       node=${HOSTS[$i]}; ip=${HOST_IPS[$i]}
+      [[ -n "$BRICK_DEV" ]] && brick="$BRICK_DEV" || brick="${BRICKS[$i]}"
       echo
       display
       display '--------------------------------------------' $LOG_SUMMARY
@@ -1016,7 +1022,7 @@ function install_nodes(){
       install_mgmt_node=false
       [[ -n "$MGMT_NODE_IN_POOL" && "$node" == "$MGMT_NODE" ]] && \
 	install_mgmt_node=true
-      prep_node $node $ip true $install_mgmt_node
+      prep_node $node $ip true $install_mgmt_node $brick
 
       display '-------------------------------------------------' $LOG_SUMMARY
       display "-- Done installing on $node ($ip)"                 $LOG_SUMMARY
@@ -1024,13 +1030,12 @@ function install_nodes(){
   done
 
   # if the mgmt node is not in the storage pool (not in hosts file) then
-  # we  need to copy the management rpm to the mgmt node and install the
-  # management server
+  # execute prep_node again in case there are management specific tasks.
   if [[ -z "$MGMT_NODE_IN_POOL" ]] ; then
     echo
     display 'Management node is not a datanode thus mgmt code needs to be installed...' $LOG_INFO
     display "-- Starting install of management node \"$MGMT_NODE\"" $LOG_DEBUG
-    prep_node $MGMT_NODE $MGMT_NODE false true
+    prep_node $MGMT_NODE $MGMT_NODE false true null # (no brick)
   fi
 }
 
@@ -1135,11 +1140,6 @@ parse_cmd $@
 
 display "$(date). Begin: $SCRIPT -- version $INSTALL_VER ***" $LOG_REPORT
 
-# define global variables based on --options and defaults
-# convention is to use the volname as the subdir under the brick as the mnt
-BRICK_MNT=$BRICK_DIR/$VOLNAME
-MAPRED_SCRATCH_DIR="$BRICK_DIR/mapredlocal" # xfs but not distributed
-
 # capture all sub-directories that are related to the install
 SUBDIRS="$(find ./* -type d -not -path "*/devutils")" # exclude devutils/
 SUBDIRS=${SUBDIRS//$'\n'/ } # replace newline with space
@@ -1147,6 +1147,21 @@ SUBDIRS=${SUBDIRS//$'\n'/ } # replace newline with space
 echo
 display "-- Verifying deployment environment, including the \"hosts\" file format:" $LOG_INFO
 verify_local_deploy_setup
+
+# since a brick-dev is optional in the local hosts file, verify that we either
+# have a brick-dev cmdline arg, or we have bricks in the hosts filem but not
+# both
+if [[ -z "$BRICK_DEV" && ${#BRICKS} == 0 ]] ; then
+  display "ERROR: a brick device path is required either as an arg to $SCRIPT or in\nthe local $HOSTS_FILE hosts file" $LOG_FORCE
+  exit -1
+elif [[ -n "$BRICK_DEV" && ${#BRICKS}>0 ]] ; then
+  display "ERROR: a brick device path can be provided either as an arg to $SCRIPT or\nin the local $HOSTS_FILE hosts file, but not in both" $LOG_FORCE
+  exit -1
+fi
+
+# convention is to use the volname as the subdir under the brick as the mnt
+BRICK_MNT=$BRICK_DIR/$VOLNAME
+MAPRED_SCRATCH_DIR="$BRICK_DIR/mapredlocal" # xfs but not distributed
 firstNode=${HOSTS[0]}
 
 [[ "${SKIP[report]}" == false ]] && report_deploy_values

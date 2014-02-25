@@ -92,16 +92,22 @@ function match_dir(){
 #
 function verify_local_deploy_setup(){
 
-  local errmsg=''; local errcnt=0
   local verify_arg=${1:-true} # default is full checking
+  local errmsg=''; local errcnt=0
 
   # read_verify_local_hosts_file: sub-function to read the deploy "hosts"
-  # file, split it into the HOSTS and, optionally, HOST_IPS global array
-  # variables, validate hostnames and ips (if present), and verify password-
-  # less ssh connectivity to each node. If the ip address field is missing it
-  # must be absent for every record in the file, and conversely, if the ip is
-  # present it must appear at the beginning of every record. NOTE: lack of the
-  # ip address field implies that DNS is being used.
+  # file, split it into the HOSTS, optionally, HOST_IPS, and optionally BRICKS
+  # global array variables, validate hostnames and ips (if present), and verify
+  # password-less ssh connectivity to each node.  Hosts file format:
+  #    [ip-addr] FQDN-or-hostname [brick-device-path]
+  #    ...
+  #
+  # If the ip address field is missing in the first record it must be absent
+  # for every record in the hosts file, and conversely, if the ip is present in
+  # the first record it must also appear in all records. Likewise, if a brick-
+  # device path is present in the first record it must appear in all records.
+  # NOTE: lack of the ip address field implies that DNS is being used.
+  #
   # Comments and empty lines are ignored in the hosts file. The number of nodes
   # represented in the hosts file is enforced to be a multiple of the replica
   # count. Downcase host names if they are upper case.
@@ -115,6 +121,7 @@ function verify_local_deploy_setup(){
   # Sets the folowing global variables:
   #   HOSTS()
   #   HOST_IPS()
+  #   BRICKS()
   #   USING_DNS, true or false, depending on content of local ./hosts file
   #   NUMNODES
   #   MGMT_NODE
@@ -122,9 +129,10 @@ function verify_local_deploy_setup(){
   # 
   function read_verify_local_hosts_file(){
 
-    local i; local host=; local ip=; local ssh_target
+    local i; local host=; local ip=; local ssh_target; local out
     local hosts_ary; local numTokens
-    local numLines; local lineNum
+    local numLines; local lineNum; local tokensPerLine
+    local brick; local have_bricks
     local tmphosts="$(mktemp)"
 
     # regular expression to validate ip addresses
@@ -140,19 +148,37 @@ function verify_local_deploy_setup(){
 
     # read the tmp hosts file into an array
     read -a hosts_ary <<< $(cat $tmphosts)
-    HOSTS=(); HOST_IPS=() # global vars
+    HOSTS=(); HOST_IPS=(); BRICKS=() # global vars
     numTokens=${#hosts_ary[@]}
+    tokensPerLine=$((numTokens/numLines))
 
-    # do we expect to have the ip column or not?
-    (( numLines == numTokens )) && USING_DNS=true || USING_DNS=false
+    case $tokensPerLine in
+      1) # hostname only
+	USING_DNS=true; have_bricks=false
+      ;;
+      2) # ip+host or host+brick
+	if [[ "${hosts_ary[0]}" =~ $VALID_IP_RE ]] ; then
+	  USING_DNS=false; have_bricks=false
+	else
+	  USING_DNS=true; have_bricks=true
+	fi
+      ;;
+      3) # ip+host+brick
+	USING_DNS=false; have_bricks=true
+      ;;
+      *)
+	errmsg+=" * Unrecognized $HOSTS_FILE format, expect: [ip] host [brick]"
+	((errcnt++))
+	return # no point in parsing hosts file
+      ;;
+    esac
 
-    # hosts file format: ip-address  hostname  # one pair per line
     for (( i=0; i<$numTokens; i++ )); do
 	ssh_target=''
 	# set 1-based line/record number
-	[[ $USING_DNS == true ]] && lineNum=$((i+1)) || lineNum=$(((i/2)+1))
+        lineNum=$(( (i/tokensPerLine)+1)) # one-based
 
-	# see if this field is an ip address
+	# optional ip address:
 	if [[ $USING_DNS == false ]] ; then
 	  ip=${hosts_ary[$i]}
 	  if [[ $ip =~ $VALID_IP_RE ]] ; then
@@ -165,7 +191,7 @@ function verify_local_deploy_setup(){
 	  fi
 	fi
 
-	# hostname:
+	# required FQDN or simple hostname:
 	host=${hosts_ary[$i]}
 	if [[ $USING_DNS == true ]] ; then # need to get ip
 	  ip=($(getent hosts "$host")) # -> (ip-addr hostname)
@@ -182,7 +208,7 @@ function verify_local_deploy_setup(){
 	  ((errcnt++))
 	  break # exit loop
         fi
-	# set ssh target not already an ip then set it to host
+	# if ssh target is not already an ip then set it to host
 	[[ -z "$ssh_target" ]] && ssh_target="$host"
         # set MGMT_NODE to first node unless --mgmt-node specified
 	if [[ -z "$MGMT_NODE" && $lineNum == 1 ]] ; then
@@ -191,7 +217,6 @@ function verify_local_deploy_setup(){
 	elif [[ -n "$MGMT_NODE" && "$MGMT_NODE" == "$host" ]] ; then
           MGMT_NODE_IN_POOL=true
         fi
-
 	if [[ "$verify_arg" == true ]] ; then
           # verify connectivity from localhost to data node. Note: ip used since
 	  # /etc/hosts may not be set up to map ip to hostname
@@ -203,6 +228,28 @@ function verify_local_deploy_setup(){
 	    break # exit loop
 	  fi
 	fi
+
+	# optional brick-device path:
+	if [[ $have_bricks == true ]] ; then
+	  ((i++))
+	  brick=${hosts_ary[$i]} # extract the brick-dev
+	  # verify brick exists on host
+	  if [[ "$verify_arg" == true ]] ; then
+	    out="$(ssh root@$host "
+		  if [[ ! -e $brick ]] ; then
+		    echo 'does not exist'
+		  elif [[ ! -b $brick ]] ; then
+		    echo 'is not a block device'
+		  fi")"
+	    if [[ -n "$out" ]] ; then
+	      errmsg+=" * $HOSTS_FILE record $lineNum:\n   \"$brick\" $out\n"
+	      ((errcnt++))
+	      break # exit loop
+	    fi
+	  fi
+	  BRICKS+=($brick)
+	fi
+
 	HOSTS+=($host)
 	HOST_IPS+=($ip)
     done

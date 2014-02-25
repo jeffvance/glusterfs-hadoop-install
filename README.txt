@@ -40,7 +40,6 @@
   from" node) to all nodes in the cluster.
  
   The tarball should contain the following:
-   - 20_glusterfs_hadoop_sudoers: sudoers file for multi-users.
    - functions: functions common to multiple scripts.
    - either glusterfs/: directory for fedora-specific files/scritps --or--
      rhs/ (plus optionally other rhs-specific sub-dirs).

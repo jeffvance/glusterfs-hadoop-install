@@ -30,7 +30,6 @@
 # note, delete the "declare -A name=" portion of arg
 VERSION='1.01'
 eval 'declare -A _ARGS='${1#*=}
-BRICK_DEV="${_ARGS[BRICK_DEV]}"
 STORAGE_INSTALL="${_ARGS[INST_STORAGE]}" # true or false
 MGMT_INSTALL="${_ARGS[INST_MGMT]}"       # true or false
 VERBOSE="${_ARGS[VERBOSE]}"  # needed be display()
@@ -38,7 +37,7 @@ LOGFILE="${_ARGS[PREP_LOG]}" # needed be display()
 DEPLOY_DIR="${_ARGS[REMOTE_DIR]}"
 HOSTS=($2)
 HOST_IPS=($3)
-#echo -e "*** $(basename $0) 1=$1\n1=$(declare -p _ARGS),\n2=${HOSTS[@]},\n3=${HOST_IPS[@]}, BRICK_DEV=$BRICK_DEV"
+#echo -e "*** $(basename $0) 1=$1\n1=$(declare -p _ARGS),\n2=${HOSTS[@]},\n3=${HOST_IPS[@]}"
 
 # source common constants and functions
 source ${DEPLOY_DIR}functions

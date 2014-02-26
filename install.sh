@@ -692,7 +692,7 @@ function xfs_brick_dirs_mnt(){
       (( $? != 0 )) && {
 	display "ERROR: $node: mount $brick as $BRICK_DIR: $out" $LOG_FORCE;
 	exit 45; }
-      display "append fstab: $out" $LOG_DEBUG
+      display "brick mount: $out" $LOG_DEBUG
 
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
 	mkdir -p $MAPRED_SCRATCH_DIR 2>&1")"

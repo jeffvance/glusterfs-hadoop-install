@@ -23,7 +23,7 @@
 
 # set global variables
 SCRIPT=$(basename $0)
-INSTALL_VER='0.75'   # self version
+INSTALL_VER='0.76'   # self version
 INSTALL_DIR=$PWD     # name of deployment (install-from) dir
 INSTALL_FROM_IP=($(hostname -I))
 INSTALL_FROM_IP=${INSTALL_FROM_IP[$(( ${#INSTALL_FROM_IP[@]}-1 ))]} # last ntry
@@ -317,7 +317,6 @@ function report_deploy_values(){
   display "---------- Deployment Values ----------" $LOG_REPORT
   display "  Install-from dir:   $INSTALL_DIR"      $LOG_REPORT
   display "  Install-from IP:    $INSTALL_FROM_IP"  $LOG_REPORT
-  display "  Included sub-dirs:  $SUBDIRS"          $LOG_REPORT
   display "  Remote install dir: $REMOTE_INSTALL_DIR"  $LOG_REPORT
   display "  \"hosts\" file:       $HOSTS_FILE"     $LOG_REPORT
   display "  Using DNS:          $USING_DNS"        $LOG_REPORT
@@ -930,10 +929,11 @@ function setup(){
 #
 function install_nodes(){
 
-  local i; local node; local ip; local install_mgmt_node; local brick
-  local LOCAL_PREP_LOG_DIR='/var/tmp/'; local out
-  local FILES_TO_CP="$PREP_SH functions $SUBDIRS"
   REBOOT_NODES=() # global
+  local out; local i; local node; local ip
+  local install_mgmt_node; local brick
+  local LOCAL_PREP_LOG_DIR='/var/tmp/'
+
 
   # prep_node: sub-function which copies the prep_node script and all sub-
   # directories in the tarball to the passed-in node. Then the prep_node.sh
@@ -949,18 +949,25 @@ function install_nodes(){
 
     local node="$1"; local ip="$2" local install_storage="$3"
     local install_mgmt="$4"; local brick="$5"
-    local err; local ssh_target
+    local err
+    local ssh_target
     [[ $USING_DNS == true ]] && ssh_target=$node || ssh_target=$ip
 
+    # start with an empty remote install dir
     ssh -oStrictHostKeyChecking=no root@$ssh_target "
 	rm -rf $REMOTE_INSTALL_DIR
 	mkdir -p $REMOTE_INSTALL_DIR"
+
+    # copy files and dirs to remote install dir, exclude devutils/
+    # note: scp does not have an "exclude" option
     display "-- Copying rhs-hadoop install files..." $LOG_INFO
-    out="$(scp -r $FILES_TO_CP root@$ssh_target:$REMOTE_INSTALL_DIR)"
+    out="$(find ./* -path ./devutils -prune -o -print \
+	   | xargs tar cf - \
+	   | ssh root@$ssh_target tar xf - -C $REMOTE_INSTALL_DIR)"
     err=$?
     display "copy install files: $out" $LOG_DEBUG
     if (( err != 0 )) ; then
-      display "ERROR: scp install files error $err" $LOG_FORCE
+      display "ERROR $err: scp install files" $LOG_FORCE
       exit 64
     fi
 
@@ -1139,10 +1146,6 @@ SKIP[perf]=false
 parse_cmd $@
 
 display "$(date). Begin: $SCRIPT -- version $INSTALL_VER ***" $LOG_REPORT
-
-# capture all sub-directories that are related to the install
-SUBDIRS="$(find ./* -type d -not -path "*/devutils")" # exclude devutils/
-SUBDIRS=${SUBDIRS//$'\n'/ } # replace newline with space
 
 echo
 display "-- Verifying deployment environment, including the \"hosts\" file format:" $LOG_INFO

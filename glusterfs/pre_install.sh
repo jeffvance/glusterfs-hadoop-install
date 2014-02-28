@@ -32,8 +32,8 @@ VERSION='1.01'
 eval 'declare -A _ARGS='${1#*=}
 STORAGE_INSTALL="${_ARGS[INST_STORAGE]}" # true or false
 MGMT_INSTALL="${_ARGS[INST_MGMT]}"       # true or false
-VERBOSE="${_ARGS[VERBOSE]}"  # needed be display()
-LOGFILE="${_ARGS[PREP_LOG]}" # needed be display()
+VERBOSE="${_ARGS[VERBOSE]}"  # needed by display()
+LOGFILE="${_ARGS[PREP_LOG]}" # needed by display()
 DEPLOY_DIR="${_ARGS[REMOTE_DIR]}"
 HOSTS=($2)
 HOST_IPS=($3)

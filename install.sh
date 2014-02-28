@@ -960,7 +960,7 @@ function install_nodes(){
 	rm -rf $REMOTE_INSTALL_DIR
 	mkdir -p $REMOTE_INSTALL_DIR"
 
-    # copy files and dirs to remote install dir
+    # copy files and dirs to remote install dir via tar and ssh
     # note: scp flattens all files into single target dir, even using -r
     display "-- Copying rhs-hadoop install files to $ssh_target..." $LOG_INFO
     out="$(echo $FILES_TO_CP \

@@ -31,11 +31,7 @@
 #   $1=associative array, passed by *declaration*, containing many individual
 #      arg values. Note: special care is needed when passing and receiving
 #      associative arrays,
-#   $2=HOSTS(array),
-#   $3=HOST IP-addrs(array).
 #
-# Note on passing arrays: the caller needs to surround the array values with
-#   embedded double quotes, eg. "\"${ARRAY[@]}\""
 # Note on passing associative arrays: the caller needs to pass the declare -A
 #   command line which initializes the array. The receiver then evals this
 #   string in order to set its own assoc array.
@@ -49,11 +45,7 @@ VERBOSE="${_ARGS[VERBOSE]}"  # needed by display()
 LOGFILE="${_ARGS[PREP_LOG]}" # needed by display()
 DEPLOY_DIR="${_ARGS[REMOTE_DIR]}"
 USING_DNS=${_ARGS[USING_DNS]} # true|false
-HOSTS=($2)
-HOST_IPS=($3)
-#echo -e "*** $(basename $0) 1=$1\n1=$(declare -p _ARGS),\n2=${HOSTS[@]},\n3=${HOST_IPS[@]}"
-
-NUMNODES=${#HOSTS[@]}
+#echo -e "*** $(basename $0) 1=$1\n1=$(declare -p _ARGS)"
 
 # source common constants and functions
 source ${DEPLOY_DIR}functions
@@ -252,8 +244,7 @@ function install_mgmt(){
 
 # execute_scripts: if there are pre_ or post_ scripts in any of the extra sub-
 # dirs then execute them. All prep_node args are passed to the script; however,
-# unfortunately, $@ cannot be used since the arrays are lost. Therefore, each
-# arg is passed individually.
+# unfortunately, $@ cannot be used.
 #
 # $1 is required and is the prefix flag for "pre" or "post" processing of
 # target scripts. Only scripts named "pre_install.sh" or "post_install.sh" are
@@ -262,16 +253,11 @@ function install_mgmt(){
 # Note: script errors are ignored and do not stop the next script from
 #    executing. However, an exit status of 99 indicates the executed script
 #    has determined that this node needs to be rebooted, so a variable is set.
-# Note: for an unknown reason, the 2 arrays need to be converted to strings
-#   then passed to the script. This is not necessary when passing the same
-#   arrays from install.sh to prep_node.sh but seems to be required here...
 #
 function execute_scripts(){
 
   local prefix="$1" # required, "pre" or "post"
   local dir; local f; local err
-  local tmp1="${HOSTS[@]}" # convert array -> string
-  local tmp2="${HOST_IPS[@]}"
 
   echo
   [[ -z "$DIRS" ]] && return # no extra dirs so no extra scripts
@@ -283,7 +269,7 @@ function execute_scripts(){
       [[ -x "$f" ]] || continue
       display "Begin executing: $f ..." $LOG_INFO
       cd $dir
-      ./$(basename $f) "$(declare -p _ARGS)" "$tmp1" "$tmp2"
+      ./$(basename $f) "$(declare -p _ARGS)"
       err=$?
       cd - >/dev/null
       (( err == 99 )) && { REBOOT_REQUIRED=true; err=0; }

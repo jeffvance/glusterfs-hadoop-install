@@ -933,6 +933,8 @@ function install_nodes(){
   local out; local i; local node; local ip
   local install_mgmt_node; local brick
   local LOCAL_PREP_LOG_DIR='/var/tmp/'
+  # list of files to copy to node, exclude devutils/
+  local FILES_TO_CP="$(find ./* -path ./devutils -prune -o -print)"
 
 
   # prep_node: sub-function which copies the prep_node script and all sub-
@@ -958,10 +960,10 @@ function install_nodes(){
 	rm -rf $REMOTE_INSTALL_DIR
 	mkdir -p $REMOTE_INSTALL_DIR"
 
-    # copy files and dirs to remote install dir, exclude devutils/
-    # note: scp does not have an "exclude" option
-    display "-- Copying rhs-hadoop install files..." $LOG_INFO
-    out="$(find ./* -path ./devutils -prune -o -print \
+    # copy files and dirs to remote install dir
+    # note: scp flattens all files into single target dir, even using -r
+    display "-- Copying rhs-hadoop install files to $ssh_target..." $LOG_INFO
+    out="$(echo $FILES_TO_CP \
 	   | xargs tar cf - \
 	   | ssh root@$ssh_target tar xf - -C $REMOTE_INSTALL_DIR)"
     err=$?

@@ -1152,7 +1152,7 @@ display "-- Verifying deployment environment, including the \"hosts\" file forma
 verify_local_deploy_setup
 
 # since a brick-dev is optional in the local hosts file, verify that we either
-# have a brick-dev cmdline arg, or we have bricks in the hosts filem but not
+# have a brick-dev cmdline arg, or we have bricks in the hosts file, but not
 # both
 if [[ -z "$BRICK_DEV" && ${#BRICKS} == 0 ]] ; then
   display "ERROR: a brick device path is required either as an arg to $SCRIPT or in\nthe local $HOSTS_FILE hosts file" $LOG_FORCE

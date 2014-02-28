@@ -105,7 +105,7 @@ function install_plugin(){
   fi
 
   display "   ... Gluster-Hadoop plug-in install successful" $LOG_SUMMARY
-  cd -
+  cd - >/dev/null
 }
  
 # validate_ntp_conf: validate the ntp config file by ensuring there is at least
@@ -285,7 +285,7 @@ function execute_scripts(){
       cd $dir
       ./$(basename $f) "$(declare -p _ARGS)" "$tmp1" "$tmp2"
       err=$?
-      cd -
+      cd - >/dev/null
       (( err == 99 )) && { REBOOT_REQUIRED=true; err=0; }
       (( err != 0  )) && display "$f error: $err" $LOG_INFO
       display "Done executing: $f" $LOG_INFO

@@ -31,10 +31,16 @@
 #   $1=associative array, passed by *declaration*, containing many individual
 #      arg values. Note: special care is needed when passing and receiving
 #      associative arrays,
+#   $2=HOSTS(array),
+#   $3=HOST IP-addrs(array).
 #
 # Note on passing associative arrays: the caller needs to pass the declare -A
 #   command line which initializes the array. The receiver then evals this
 #   string in order to set its own assoc array.
+#
+# Note on passing arrays: the caller needs to surround the array values with
+#   embedded double quotes, eg. "\"${ARRAY[@]}\""
+
 
 # constants and args
 eval 'declare -A _ARGS='${1#*=} # delete the "declare -A name=" portion of arg
@@ -45,7 +51,10 @@ VERBOSE="${_ARGS[VERBOSE]}"  # needed by display()
 LOGFILE="${_ARGS[PREP_LOG]}" # needed by display()
 DEPLOY_DIR="${_ARGS[REMOTE_DIR]}"
 USING_DNS=${_ARGS[USING_DNS]} # true|false
-#echo -e "*** $(basename $0) 1=$1\n1=$(declare -p _ARGS)"
+HOSTS=($2)
+HOST_IPS=($3)
+NUMNODES=${#HOSTS[@]}
+#echo -e "*** $(basename $0) 1=$1\n1=$(declare -p _ARGS),\n2=${HOSTS[@]},\n3=${
 
 # source common constants and functions
 source ${DEPLOY_DIR}functions

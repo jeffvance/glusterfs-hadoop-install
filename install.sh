@@ -978,6 +978,7 @@ function install_nodes(){
     #   declaration is passed as a string, and the receiving script or function
     #   eval's the arg, but omits the "declare -A name=" substring. Values in
     #   an associative array cannot be arrays or other structures.
+    # note: arrays must be escape-quoted.
     # note: prep_node.sh may apply patches which require $node to be rebooted
     declare -A PREP_ARGS=([BRICK_DEV]="$brick" [NODE]="$node" \
 	[INST_STORAGE]="$install_storage" [INST_MGMT]="$install_mgmt" \
@@ -985,7 +986,8 @@ function install_nodes(){
 	[PREP_LOG]="$PREP_NODE_LOG_PATH" [REMOTE_DIR]="$REMOTE_INSTALL_DIR" \
 	[USING_DNS]=$USING_DNS)
     out="$(ssh -oStrictHostKeyChecking=no root@$ssh_target $REMOTE_PREP_SH \
-        "\"$(declare -p PREP_ARGS)\"" )"
+        "\"$(declare -p PREP_ARGS)\"" "\"${HOSTS[@]}\"" \ "\"${HOST_IPS[@]}\""
+	)"
     err=$?
     # prep_node writes all messages to the PREP_NODE_LOG logfile regardless of
     # the verbose setting. However, it outputs (and is captured above) only

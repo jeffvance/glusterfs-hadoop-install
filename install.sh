@@ -261,7 +261,7 @@ function report_deploy_values(){
 
     for (( i=0; i<$NUMNODES; i++ )); do
 	node="${HOSTS[$i]}"
-	vers="$(ssh root@$node 'gluster --version|head -n 1')"
+	vers="$(ssh root@$node 'gluster --version | head -n 1')"
 	vers=${vers#glusterfs } # strip glusterfs from beginning
 	vers=${vers%% built*}   # strip trailing chars from end to " built"
 	node_vers[$i]=$vers
@@ -341,6 +341,25 @@ function report_deploy_values(){
   esac
 }
 
+# function start_gluster: make sure glusterd is started on all nodes.
+function start_gluster(){
+
+  local node; local out; local err
+
+  for node in "${HOSTS[@]}" ; do
+      out="$(ssh -oStrictHostKeyChecking=no root@$node "
+	  service glusterd start
+	  sleep 1
+	  ps -C glusterd 2>&1")"
+      err=$?
+      display "glusterd start on node $node: $out" $LOG_DEBUG
+      if (( err != 0 )) ; then
+	display "ERROR on node $node: glusterd not started" $LOG_FORCE
+	exit 2
+      fi
+  done
+}
+
 # function verify_hadoop_gid: check that the gid for the passed-in group is
 # the same on all nodes. Args: $1=group name
 #
@@ -407,7 +426,7 @@ function verify_peer_detach(){
 
   while (( i < LIMIT )) ; do # don't loop forever
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	gluster peer status")" # "Number of Peers: x"
+	    gluster peer status | head -n 1")" # 'Number of Peers: x'
       [[ $? == 0 && -n "$out" && ${out##*: } == 0 ]] && break
       sleep $SLEEP 
       ((i++))
@@ -435,7 +454,7 @@ function verify_pool_created(){
   while (( i < LIMIT )) ; do # don't loop forever
       # out contains lines where the state != desired state, == problem
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	   gluster peer status|grep 'State: '")"
+	   gluster peer status | grep 'State: '")"
       if [[ -n "$out" ]] ; then # have all State: lines else unexpected output
         out="$(grep -v "$DESIRED_STATE" <<<$out)"
         [[ -z "$out" ]] && break # empty -> all nodes in desired state
@@ -490,18 +509,20 @@ function verify_vol_created(){
 function verify_vol_started(){
 
   local volStartErr=$1
-  local i=0; local rtn; local SLEEP=2; local LIMIT=$((NUMNODES * 2))
+  local i=0; local out; local SLEEP=2; local LIMIT=$((NUMNODES * 2))
   local FILTER='^Online' # grep filter
   local ONLINE=': Y'     # grep not-match value
 
   while (( i < LIMIT )) ; do # don't loop forever
       # grep for Online status != Y
-      rtn="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	gluster volume status $VOLNAME detail 2>/dev/null |
-	 	grep $FILTER |
-		grep -v '$ONLINE' |
-		wc -l")"
-      (( rtn == 0 )) && break # exit loop
+      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+	xyzzy=\$(gluster volume status $VOLNAME detail 2>/dev/null)
+	if (( $? == 0 )) ; then
+	  grep $FILTER <<<\$xyzzy
+	  | grep -v '$ONLINE'
+	  | wc -l
+ 	fi")"
+      (( out == 0 )) && break # exit loop
       sleep $SLEEP
       ((i++))
       display "...verify vol start wait: $((i*SLEEP)) seconds" $LOG_DEBUG
@@ -1179,6 +1200,9 @@ display '----------------------------------------' $LOG_SUMMARY
 display '--    Begin cluster configuration     --' $LOG_SUMMARY
 display '----------------------------------------' $LOG_SUMMARY
 echo
+
+# make sure glusterd is running on all nodes
+start_gluster
 
 # clean up mounts and volume from previous run, if any...
 if [[ "${SKIP[clean]}" == false ]] ; then

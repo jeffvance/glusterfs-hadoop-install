@@ -450,25 +450,28 @@ function fix_vol_stop_delete(){
 # verify_vol_stop_delete: there are timing windows when using ssh and the
 # gluster cli. This function returns once it has confirmed that the volume has
 # been stopped and deleted successfully, or a predefined number of attempts
-# have been made. An attempt is made to correct a stop/delete failure. The
-# returned exit code from the previous cluster cmd is passed as $1.
+# have been made. An attempt is made to correct a stop/delete failure.
+# Args: 1=exit code from gluster stop/delete commands, 2=output from gluster
 #
 function verify_vol_stop_delete(){
 
-  local stop_del_err=$1
+  local stop_del_err=$1; local errmsg="$2"
   local out; local i=0; local SLEEP=2; local LIMIT=$((NUMNODES * 2))
-  local EXPECTED_VOL_ERROR="Volume $VOLNAME does not exist"
+  local EXPCT_VOL_STATUS_ERR="Volume $VOLNAME does not exist"
+  local EXPCT_VOL_DEL_MSG="volume delete: ${VOLNAME}: success"
 
-  if (( stop_del_err != 0 )) ; then # stop and/or delete failed...
-    # kill gluster processes then restart glusterd re-try stop/delete
-    fix_vol_stop_delete
+  if (( stop_del_err != 0 )) && \ # stop and/or delete error
+     grep -qsv -E "$EXPCT_VOL_DEL_MSG|$EXPCT_VOL_STATUS_ERR" <<<$errmsg ; then
+      # unexpected vol stop/del output so kill gluster processes, restart
+      # glusterd, and re-try the vol stop/delete
+      fix_vol_stop_delete
   fi
 
   # verify stop/delete
   while (( i < LIMIT )) ; do # don't loop forever
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
 	    gluster volume status $VOLNAME")"
-      [[ $? == 1 && "$out" == "$EXPECTED_VOL_ERR" ]] && break
+      [[ $? == 1 && "$out" == "$EXPCTD_VOL_STATUS_ERR" ]] && break
       sleep $SLEEP 
       ((i++))
       display "...verify vol stop/delete wait: $((i*SLEEP)) seconds" $LOG_DEBUG
@@ -673,7 +676,7 @@ function cleanup(){
 	gluster --mode=script volume delete $VOLNAME 2>&1")"
   err=$?
   display "gluster results: $out" $LOG_DEBUG
-  verify_vol_stop_delete $err
+  verify_vol_stop_delete $err "$out"
 
   # 4) detach nodes on all but firstNode
   display "  -- from node $firstNode:" $LOG_INFO

@@ -416,6 +416,72 @@ function verify_user_uids(){
   done
 }
 
+# fix_vol_stop_delete: kill and re-start gluster processes, restart glusterd, 
+# re-try stopping and deleting the volume.
+#
+function fix_vol_stop_delete(){
+
+  local node; local out
+  local GLUSTER_PROCESSES='glusterd glusterfs glusterfsd'
+
+  display "attempting to fix vol stop/delete error..." $LOG_DEBUG
+
+  # kill gluster processes on all nodes
+  for node in "${HOSTS[@]}"; do
+      display "   killing gluster processes on node $node" $LOG_DEBUG
+      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+	    killall $GLUSTER_PROCESSES")"
+      sleep 1
+  done
+
+  display "   re-starting gluster processes..." LOG_DEBUG
+  start_gluster # on all nodes
+
+  # try again to stop/del the vol, use "force" where we can
+  display "   re-trying vol stop/delete..." LOG_DEBUG
+  out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+	gluster --mode=script volume stop $VOLNAME force 2>&1
+        sleep 5
+	gluster --mode=script volume delete $VOLNAME 2>&1")"
+
+  sleep 5
+}
+
+# verify_vol_stop_delete: there are timing windows when using ssh and the
+# gluster cli. This function returns once it has confirmed that the volume has
+# been stopped and deleted successfully, or a predefined number of attempts
+# have been made. An attempt is made to correct a stop/delete failure. The
+# returned exit code from the previous cluster cmd is passed as $1.
+#
+function verify_vol_stop_delete(){
+
+  local stop_del_err=$1
+  local out; local i=0; local SLEEP=2; local LIMIT=$((NUMNODES * 2))
+  local EXPECTED_VOL_ERROR="Volume $VOLNAME does not exist"
+
+  if (( stop_del_err != 0 )) ; then # stop and/or delete failed...
+    # kill gluster processes then restart glusterd re-try stop/delete
+    fix_vol_stop_delete
+  fi
+
+  # verify stop/delete
+  while (( i < LIMIT )) ; do # don't loop forever
+      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+	    gluster volume status $VOLNAME")"
+      [[ $? == 1 && "$out" == "$EXPECTED_VOL_ERR" ]] && break
+      sleep $SLEEP 
+      ((i++))
+      display "...verify vol stop/delete wait: $((i*SLEEP)) seconds" $LOG_DEBUG
+  done
+
+  if (( i < LIMIT )) ; then 
+    display "   Volume stopped/deleted..." $LOG_INFO
+  else
+    display "   ERROR: Volume not stopped/deleted..." $LOG_FORCE
+    exit 13
+  fi
+}
+
 # verify_peer_detach: there are timing windows when using ssh and the gluster
 # cli. This function returns once it has confirmed that the number of nodes in
 # the trusted pool is zero, or a predefined number of attempts have been made.
@@ -434,7 +500,7 @@ function verify_peer_detach(){
   done
 
   if (( i < LIMIT )) ; then 
-    display "   Trusted pool detached..." $LOG_DEBUG
+    display "   Trusted pool detached..." $LOG_INFO
   else
     display "   ERROR: Trusted pool NOT detached..." $LOG_FORCE
     exit 15
@@ -448,26 +514,34 @@ function verify_peer_detach(){
 #
 function verify_pool_created(){
 
-  local DESIRED_STATE="Peer in Cluster (Connected)"
+  local DESIRED_STATE='Peer in Cluster'
   local out; local i=0; local SLEEP=2; local LIMIT=$((NUMNODES * 2))
 
+  # out contains lines where the state != desired state, which is a problem
+  # note: need to use scratch file rather than a variable since the
+  #  variable's content gets flattened (no newlines) and thus the grep -v
+  #  won't find a node with the wrong state.
   while (( i < LIMIT )) ; do # don't loop forever
-      # out contains lines where the state != desired state, == problem
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	   gluster peer status | grep 'State: '")"
-      if [[ -n "$out" ]] ; then # have all State: lines else unexpected output
-        out="$(grep -v "$DESIRED_STATE" <<<$out)"
-        [[ -z "$out" ]] && break # empty -> all nodes in desired state
-      fi
+	    gluster peer status >peer_status.out
+	    if (( \$? == 0 )) ; then
+	      grep 'State: ' <peer_status.out | grep -v '$DESIRED_STATE' 
+	    else
+	      echo 'All messed up!'
+            fi")"
+      [[ -z "$out" ]] && break # empty -> all nodes in desired state
       sleep $SLEEP 
       ((i++))
       display "...verify pool create wait: $((i*SLEEP)) seconds" $LOG_DEBUG
   done
 
   if (( i < LIMIT )) ; then 
-    display "   Trusted pool formed..." $LOG_DEBUG
+    display "   Trusted pool formed..." $LOG_INFO
   else
     display "   ERROR: Trusted pool NOT formed..." $LOG_FORCE
+    out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+          gluster peer status")"
+    display "$out" $LOG_FORCE
     exit 18
   fi
 }
@@ -492,7 +566,7 @@ function verify_vol_created(){
   done
 
   if (( i < LIMIT )) ; then 
-    display "   Volume \"$VOLNAME\" created..." $LOG_DEBUG
+    display "   Volume \"$VOLNAME\" created..." $LOG_INFO
   else
     display "   ERROR: Volume \"$VOLNAME\" creation failed with error $volCreateErr" $LOG_FORCE
     display "          Bricks=\"$bricks\"" $LOG_FORCE
@@ -516,12 +590,12 @@ function verify_vol_started(){
   while (( i < LIMIT )) ; do # don't loop forever
       # grep for Online status != Y
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	xyzzy=\$(gluster volume status $VOLNAME detail 2>/dev/null)
-	if (( $? == 0 )) ; then
-	  grep $FILTER <<<\$xyzzy
-	  | grep -v '$ONLINE'
-	  | wc -l
- 	fi")"
+	    xyzzy=\$(gluster volume status $VOLNAME detail 2>/dev/null)
+	    if (( \$? == 0 )) ; then
+	      grep $FILTER <<<'$xyzzy'
+	      | grep -v '$ONLINE'
+	      | wc -l
+ 	    fi")"
       (( out == 0 )) && break # exit loop
       sleep $SLEEP
       ((i++))
@@ -529,7 +603,7 @@ function verify_vol_started(){
   done
 
   if (( i < LIMIT )) ; then 
-    display "   Volume \"$VOLNAME\" started..." $LOG_DEBUG
+    display "   Volume \"$VOLNAME\" started..." $LOG_INFO
   else
     display "   ERROR: Volume \"$VOLNAME\" start failed with error $volStartErr" $LOG_FORCE
     exit 24
@@ -550,7 +624,7 @@ function verify_gluster_mnt(){
     display "ERROR: $GLUSTER_MNT *NOT* mounted" $LOG_FORCE
     exit 27
   fi
-  display "$GLUSTER_MNT mounted: $out" $LOG_DEBUG
+  display "$GLUSTER_MNT mounted: $out" $LOG_INFO
 }
 
 # cleanup: do the following steps (order matters), but prompt for confirmation
@@ -566,7 +640,7 @@ function verify_gluster_mnt(){
 #
 function cleanup(){
 
-  local node=''; local out; local ans='y'
+  local node=''; local out; local err; local ans='y'
 
   if [[ "$ANS_YES" == 'n' ]] ; then
     echo
@@ -597,7 +671,9 @@ function cleanup(){
 	rm -rf $GLUSTER_MNT/* 2>&1
 	gluster --mode=script volume stop $VOLNAME 2>&1
 	gluster --mode=script volume delete $VOLNAME 2>&1")"
+  err=$?
   display "gluster results: $out" $LOG_DEBUG
+  verify_vol_stop_delete $err
 
   # 4) detach nodes on all but firstNode
   display "  -- from node $firstNode:" $LOG_INFO
@@ -645,10 +721,6 @@ function create_trusted_pool(){
       out+="\n"
   done
   display "peer probe: $out" $LOG_DEBUG
-
-  out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	gluster peer status 2>&1")"
-  display "peer status: $out" $LOG_DEBUG
 }
 
 # xfs_brick_dirs_mnt: invoked by setup(). For each hosts do:
@@ -813,9 +885,9 @@ function create_hadoop_dirs(){
       perm="${MR_PERMS[$i]}"
       owner="${MR_OWNERS[$i]}"
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	     mkdir -p $dir 2>&1     && \
-	     chmod $perm $dir 2>&1  && \
-	     chown $owner:$HADOOP_G $dir 2>&1")"
+	     mkdir -p $dir 2>&1 \
+	     && chmod $perm $dir 2>&1 \
+	     && chown $owner:$HADOOP_G $dir 2>&1")"
       (( $? != 0 )) && {
 	display "ERROR: $firstNode: mkdir/chmod/chown on $dir: $out" $LOG_FORCE;
 	exit 61; }

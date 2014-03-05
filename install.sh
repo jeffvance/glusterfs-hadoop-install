@@ -461,10 +461,10 @@ function verify_vol_stop_delete(){
   local EXPCT_VOL_DEL_MSG="volume delete: ${VOLNAME}: success"
 
   if (( stop_del_err != 0 )) && \ # stop and/or delete error
-     grep -qsv -E "$EXPCT_VOL_DEL_MSG|$EXPCT_VOL_STATUS_ERR" <<<$errmsg ; then
-      # unexpected vol stop/del output so kill gluster processes, restart
-      # glusterd, and re-try the vol stop/delete
-      fix_vol_stop_delete
+      grep -qsv -E "$EXPCT_VOL_DEL_MSG|$EXPCT_VOL_STATUS_ERR" <<<$errmsg ; then
+    # unexpected vol stop/del output so kill gluster processes, restart
+    # glusterd, and re-try the vol stop/delete
+    fix_vol_stop_delete
   fi
 
   # verify stop/delete

@@ -520,7 +520,7 @@ function verify_pool_created(){
   # out contains lines where the state != desired state, which is a problem
   # note: need to use scratch file rather than a variable since the
   #  variable's content gets flattened (no newlines) and thus the grep -v
-  #  won't find a node with the wrong state.
+  #  won't find a node with the wrong state, unless they're all wrong.
   while (( i < LIMIT )) ; do # don't loop forever
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
 	    gluster peer status >peer_status.out

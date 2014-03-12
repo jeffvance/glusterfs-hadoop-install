@@ -23,7 +23,7 @@
 
 # set global variables
 SCRIPT=$(basename $0)
-INSTALL_VER='0.76'   # self version
+INSTALL_VER='0.77'   # self version
 INSTALL_DIR=$PWD     # name of deployment (install-from) dir
 INSTALL_FROM_IP=($(hostname -I))
 INSTALL_FROM_IP=${INSTALL_FROM_IP[$(( ${#INSTALL_FROM_IP[@]}-1 ))]} # last ntry
@@ -341,6 +341,27 @@ function report_deploy_values(){
   esac
 }
 
+# function kill_gluster: make sure glusterd and related processes are killed.
+function kill_gluster(){
+
+  local node; local out
+  local GLUSTER_PROCESSES='glusterd glusterfs glusterfsd'
+
+  # kill gluster processes on all nodes
+  display "Stopping gluster processes on all nodes..." $LOG_DEBUG
+  for node in "${HOSTS[@]}"; do
+      display "   stopping gluster on node $node: $out" $LOG_DEBUG
+      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+	    killall $GLUSTER_PROCESSES" 2>&1)"
+      sleep 2
+      if ps -C ${GLUSTER_PROCESSES// /,} >& /dev/null ; then
+	display "ERROR on node $node: 1 or more gluster processes not killed" \
+		$LOG_FORCE
+	exit 2
+      fi
+  done
+}
+
 # function start_gluster: make sure glusterd is started on all nodes.
 function start_gluster(){
 
@@ -355,7 +376,7 @@ function start_gluster(){
       display "glusterd start on node $node: $out" $LOG_DEBUG
       if (( err != 0 )) ; then
 	display "ERROR on node $node: glusterd not started" $LOG_FORCE
-	exit 2
+	exit 3
       fi
   done
 }
@@ -373,7 +394,7 @@ function verify_hadoop_gid(){
       out="$(ssh -oStrictHostKeyChecking=no root@$node "getent group $grp")"
       if (( $? != 0 )) || [[ -z "$out" ]] ; then
 	display "ERROR: group $grp not created on $node" $LOG_FORCE
-	exit 3
+	exit 4
       fi
       # extract gid, "hadoop:x:<gid>", eg hadoop:x:500;
       gid=${out%:}   # delete trailing colon
@@ -416,35 +437,19 @@ function verify_user_uids(){
   done
 }
 
-# fix_vol_stop_delete: kill and re-start gluster processes, restart glusterd, 
-# re-try stopping and deleting the volume.
+# fix_vol_stop_delete: use force to re-attempt to stop/delete the volume.
 #
 function fix_vol_stop_delete(){
 
   local node; local out
-  local GLUSTER_PROCESSES='glusterd glusterfs glusterfsd'
 
   display "attempting to fix vol stop/delete error..." $LOG_DEBUG
-
-  # kill gluster processes on all nodes
-  for node in "${HOSTS[@]}"; do
-      display "   killing gluster processes on node $node" $LOG_DEBUG
-      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	    killall $GLUSTER_PROCESSES")"
-      sleep 1
-  done
-
-  display "   re-starting gluster processes..." LOG_DEBUG
-  start_gluster # on all nodes
-
-  # try again to stop/del the vol, use "force" where we can
-  display "   re-trying vol stop/delete..." LOG_DEBUG
+  display "   re-trying vol stop/delete..." $LOG_DEBUG
   out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
 	gluster --mode=script volume stop $VOLNAME force 2>&1
-        sleep 5
+        sleep 3
 	gluster --mode=script volume delete $VOLNAME 2>&1")"
-
-  sleep 5
+  sleep 3
 }
 
 # verify_vol_stop_delete: there are timing windows when using ssh and the
@@ -460,7 +465,7 @@ function verify_vol_stop_delete(){
   local EXPCT_VOL_STATUS_ERR="Volume $VOLNAME does not exist"
   local EXPCT_VOL_DEL_MSG="volume delete: ${VOLNAME}: success"
 
-  if (( stop_del_err != 0 )) && \ # stop and/or delete error
+  if (( stop_del_err != 0 )) && \
       grep -qsv -E "$EXPCT_VOL_DEL_MSG|$EXPCT_VOL_STATUS_ERR" <<<$errmsg ; then
     # unexpected vol stop/del output so kill gluster processes, restart
     # glusterd, and re-try the vol stop/delete
@@ -592,14 +597,17 @@ function verify_vol_started(){
 
   while (( i < LIMIT )) ; do # don't loop forever
       # grep for Online status != Y
+      # note: need to use scratch file rather than a variable since the
+      #  variable's content gets flattened (no newlines) and thus the grep -v
+      #  won't find a node not online, unless they're all offline.
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	    xyzzy=\$(gluster volume status $VOLNAME detail 2>/dev/null)
+	    gluster volume status $VOLNAME detail >vol_status.out
 	    if (( \$? == 0 )) ; then
-	      grep $FILTER <<<'$xyzzy'
-	      | grep -v '$ONLINE'
-	      | wc -l
+	      grep $FILTER <vol_status.out | grep -v '$ONLINE' | wc -l
+            else
+              echo 'vol status error'
  	    fi")"
-      (( out == 0 )) && break # exit loop
+      [[ "$out" == 0 ]] && break # exit loop
       sleep $SLEEP
       ((i++))
       display "...verify vol start wait: $((i*SLEEP)) seconds" $LOG_DEBUG
@@ -662,6 +670,11 @@ function cleanup(){
   display "**Note: gluster \"cleanup\" errors below may be ignored if the $VOLNAME volume" $LOG_INFO
   display "  has not been created or started, etc." $LOG_INFO
 
+  # 0) kill gluster in case there are various gluster processes hangs, then
+  #    re-start gluster
+  kill_gluster
+  start_gluster
+
   # 1) delete all files/dirs under volume mount (distributed) 
   #    before tearing down the trusted pool
   # 2) stop vol (distributed)
@@ -699,12 +712,11 @@ function cleanup(){
   for node in "${HOSTS[@]}"; do
       out+="$(ssh -oStrictHostKeyChecking=no root@$node "
           if grep -qs $GLUSTER_MNT /proc/mounts ; then
-            umount $GLUSTER_MNT
+            umount $GLUSTER_MNT 2>&1
           fi
           if grep -qs $BRICK_DIR /proc/mounts ; then
             umount $BRICK_DIR 2>&1
           fi")"
-      out+="\n"
   done
   display "umount $GLUSTER_MNT & $BRICK_DIR: $out" $LOG_DEBUG
 }
@@ -742,6 +754,7 @@ function xfs_brick_dirs_mnt(){
 
   for (( i=0 ; i<$NUMNODES ; i++ )) ; do
       node=${HOSTS[$i]}
+      display "On $node:" $LOG_DEBUG
       [[ -n "$BRICK_DEV" ]] && brick="$BRICK_DEV" || brick="${BRICKS[$i]}"
       # mkfs.xfs
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
@@ -750,20 +763,20 @@ function xfs_brick_dirs_mnt(){
 	display "ERROR: $node: mkfs.xfs on brick $brick: $out" $LOG_FORCE
 	exit 33
       fi
-      display "mkfs.xfs on $brick: $out" $LOG_DEBUG
+      display " * mkfs.xfs on $brick: $out" $LOG_DEBUG
 
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
 	    mkdir -p $BRICK_MNT 2>&1")"
       (( $? != 0 )) && {
 	display "ERROR: $node: mkdir $BRICK_MNT: $out" $LOG_FORCE; exit 36; }
-      display "mkdir $BRICK_MNT: $out" $LOG_DEBUG
+      display " * mkdir $BRICK_MNT: $out" $LOG_DEBUG
 
       # make vol mnt dir
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
 	    mkdir -p $GLUSTER_MNT 2>&1")"
       (( $? != 0 )) && {
 	display "ERROR: $node: mkdir $GLUSTER_MNT: $out" $LOG_FORCE; exit 39; }
-      display "mkdir $GLUSTER_MNT: $out" $LOG_DEBUG
+      display " * mkdir $GLUSTER_MNT: $out" $LOG_DEBUG
 
       # append brick and gluster mounts to fstab
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
@@ -776,7 +789,7 @@ function xfs_brick_dirs_mnt(){
 	     fi")"
       (( $? != 0 )) && {
 	display "ERROR: $node: append fstab: $out" $LOG_FORCE; exit 42; }
-      display "append fstab: $out" $LOG_DEBUG
+      display " * append fstab: $out" $LOG_DEBUG
 
       # Note: mapred scratch dir must be created *after* the brick is
       # mounted; otherwise, mapred dir will be "hidden" by the mount.
@@ -787,14 +800,14 @@ function xfs_brick_dirs_mnt(){
       (( $? != 0 )) && {
 	display "ERROR: $node: mount $brick as $BRICK_DIR: $out" $LOG_FORCE;
 	exit 45; }
-      display "brick mount: $out" $LOG_DEBUG
+      display " * brick mount: $out" $LOG_DEBUG
 
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
 	mkdir -p $MAPRED_SCRATCH_DIR 2>&1")"
       (( $? != 0 )) && {
         display "ERROR: $node: mkdir $MAPRED_SCRATCH_DIR: $out" $LOG_FORCE;
         exit 48; }
-      display "mkdir $MAPRED_SCRATCH_DIR: $out" $LOG_DEBUG
+      display " * mkdir $MAPRED_SCRATCH_DIR: $out" $LOG_DEBUG
   done
 }
 
@@ -970,7 +983,7 @@ function setup(){
     err=$?
     display "vol start: $out" $LOG_DEBUG
     verify_vol_started $err
-    # ownership and permissions must be set *afer* the gluster vol is mounted
+    # ownership and permissions must be set *after* the gluster vol is mounted
     for node in "${HOSTS[@]}"; do
 	display "-- $node -- mount volume" $LOG_INFO
 	mount_volume "$node"
@@ -1059,9 +1072,8 @@ function install_nodes(){
     # copy files and dirs to remote install dir via tar and ssh
     # note: scp flattens all files into single target dir, even using -r
     display "-- Copying rhs-hadoop install files to $ssh_target..." $LOG_INFO
-    out="$(echo $FILES_TO_CP \
-	   | xargs tar cf - \
-	   | ssh root@$ssh_target tar xf - -C $REMOTE_INSTALL_DIR)"
+    out="$(echo $FILES_TO_CP | xargs tar cf - | \
+	   ssh root@$ssh_target tar xf - -C $REMOTE_INSTALL_DIR)"
     err=$?
     display "copy install files: $out" $LOG_DEBUG
     if (( err != 0 )) ; then

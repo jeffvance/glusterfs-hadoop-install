@@ -650,7 +650,7 @@ function verify_umounts(){
     ((errcnt++))
   fi
   ssh -oStrictHostKeyChecking=no root@$node "
-      grep -qs $BRICK_MNT /proc/mounts"
+      grep -qs $BRICK_DIR /proc/mounts"
   if (( $? == 0 )) ; then
     display "ERROR on $node: $BRICK_MNT still mounted" $LOG_FORCE
     ((errcnt++))

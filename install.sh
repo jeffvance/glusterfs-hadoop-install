@@ -638,22 +638,24 @@ function verify_vol_started(){
 # verify_umounts: given the passed in node, verify that the glusterfs and
 # brick umounts succeeded. 
 #
-function verify_unmounts(){
+function verify_umounts(){
 
   local node=$1 # required
   local out; local errcnt=0
 
-  if grep -qs $GLUSTER_MNT /proc/mounts ; then
-    display "ERROR: $GLUSTER_MNT still mounted" $LOG_FORCE
+  ssh -oStrictHostKeyChecking=no root@$node "
+      grep -qs $GLUSTER_MNT /proc/mounts"
+  if (( $? == 0 )) ; then
+    display "ERROR on $node: $GLUSTER_MNT still mounted" $LOG_FORCE
     ((errcnt++))
   fi
-  if grep -qs $BRICK_MNT /proc/mounts ; then
-    display "ERROR: $BRICK_MNT still mounted" $LOG_FORCE
+  ssh -oStrictHostKeyChecking=no root@$node "
+      grep -qs $BRICK_MNT /proc/mounts"
+  if (( $? == 0 )) ; then
+    display "ERROR on $node: $BRICK_MNT still mounted" $LOG_FORCE
     ((errcnt++))
   fi
-  (( errcnt > 0 )) && exit 27
-
-  display "$GLUSTER_MNT and $BRICK_MNT un-mounted: $out" $LOG_INFO
+  (( errcnt > 0 )) && exit 26
 }
 
 # verify_gluster_mnt: given the passed in node, verify that the glusterfs
@@ -665,12 +667,11 @@ function verify_gluster_mnt(){
   local out
 
   out="$(ssh -oStrictHostKeyChecking=no root@$node "
-	grep $GLUSTER_MNT /proc/mounts 2>&1")"
+	grep -qs $GLUSTER_MNT /proc/mounts")"
   if (( $? != 0 )) ; then
-    display "ERROR: $GLUSTER_MNT *NOT* mounted" $LOG_FORCE
+    display "ERROR on $node: $GLUSTER_MNT *NOT* mounted" $LOG_FORCE
     exit 27
   fi
-  display "$GLUSTER_MNT mounted: $out" $LOG_INFO
 }
 
 # cleanup: do the following steps (order matters), but prompt for confirmation
@@ -748,18 +749,17 @@ function cleanup(){
   display "  -- on all nodes:"            $LOG_INFO
   display "       umount $GLUSTER_MNT..." $LOG_INFO
   display "       umount $BRICK_DIR..."   $LOG_INFO
-  out=''
   for node in "${HOSTS[@]}"; do
-      out+="$(ssh -oStrictHostKeyChecking=no root@$node "
+      out="$(ssh -oStrictHostKeyChecking=no root@$node "
           if grep -qs $GLUSTER_MNT /proc/mounts ; then
             umount $GLUSTER_MNT 2>&1
           fi
           if grep -qs $BRICK_DIR /proc/mounts ; then
             umount $BRICK_DIR 2>&1
           fi")"
-     verify_umounts $node
+      display "umounts node $node: $out" $LOG_DEBUG
+      verify_umounts $node
   done
-  display "umount $GLUSTER_MNT & $BRICK_DIR: $out" $LOG_DEBUG
 }
 
 # create_trusted_pool: create the trusted storage pool. No error if the pool
@@ -853,8 +853,7 @@ function xfs_brick_dirs_mnt(){
 }
 
 # mount_volume: on the passed-in node, mount the hadoop volume and verify that
-# the mount worked.
-# Args: $1=node (hostname)
+# the mount worked. $1=node (hostname)
 #
 function mount_volume(){
 
@@ -863,7 +862,7 @@ function mount_volume(){
   # mount vol via fstab
   out="$(ssh -oStrictHostKeyChecking=no root@$node "mount $GLUSTER_MNT 2>&1")"
   (( $? != 0 )) && {
-    display "ERROR: $node: mount $GLUSTER_MNT: $out" $LOG_FORCE;
+    display "ERROR on $node: mount $GLUSTER_MNT: $out" $LOG_FORCE;
     exit 52; }
 
   display "mount $GLUSTER_MNT: $out" $LOG_DEBUG

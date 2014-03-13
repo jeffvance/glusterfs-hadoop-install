@@ -348,15 +348,16 @@ function kill_gluster(){
   local GLUSTER_PROCESSES='glusterd glusterfs glusterfsd'
 
   # kill gluster processes on all nodes
-  display "Stopping gluster processes on all nodes..." $LOG_DEBUG
+  display "Stopping gluster processes on all nodes..." $LOG_INFO
   for node in "${HOSTS[@]}"; do
-      display "   stopping gluster on node $node: $out" $LOG_DEBUG
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
 	    killall $GLUSTER_PROCESSES" 2>&1)"
       sleep 2
       if ps -C ${GLUSTER_PROCESSES// /,} >& /dev/null ; then
 	display "ERROR on node $node: 1 or more gluster processes not killed" \
 		$LOG_FORCE
+	display "  service: $(service glusterd status)" $LOG_FORCE
+	display "       ps: $(ps -ef|grep gluster|grep -v grep)" $LOG_FORCE
 	exit 2
       fi
   done
@@ -367,15 +368,17 @@ function start_gluster(){
 
   local node; local out; local err
 
+  display "Starting gluster processes on all nodes..." $LOG_INFO
   for node in "${HOSTS[@]}" ; do
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
 	  service glusterd start
 	  sleep 1
 	  ps -C glusterd 2>&1")"
       err=$?
-      display "glusterd start on node $node: $out" $LOG_DEBUG
       if (( err != 0 )) ; then
 	display "ERROR on node $node: glusterd not started" $LOG_FORCE
+	display "  service: $(service glusterd status)" $LOG_FORCE
+	display "       ps: $(ps -ef|grep gluster|grep -v grep)" $LOG_FORCE
 	exit 3
       fi
   done
@@ -493,12 +496,21 @@ function verify_vol_stop_delete(){
 # verify_peer_detach: there are timing windows when using ssh and the gluster
 # cli. This function returns once it has confirmed that the number of nodes in
 # the trusted pool is zero, or a predefined number of attempts have been made.
+# $1 = 0 or >0. If $1==0 this is the first time attempting to verify the peer
+# detach and what would be considered errors are treated as warnings. When
+# $1 is > 0 then the caller will likely exit upon an error.
+# Note: the caller is expected to invoke this function capturing its output in
+#   a variable, and to call display() with the captured output.
 #
 function verify_peer_detach(){
 
-  local out; local i=0; local SLEEP=2; local LIMIT=$((NUMNODES * 2))
+  local first=$1 # first time verifying?
+  local out; local i=0; local SLEEP=2; local LIMIT=$((NUMNODES * 1))
+  local err_warn='WARN'; local rtn=0
 
-  while (( i < LIMIT )) ; do # don't loop forever
+  (( first != 0 )) && err_warn='ERROR'
+
+  while (( i < LIMIT )) ; do
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
 	    gluster peer status | head -n 1")" # 'Number of Peers: x'
       [[ $? == 0 && -n "$out" && ${out##*: } == 0 ]] && break
@@ -510,9 +522,11 @@ function verify_peer_detach(){
   if (( i < LIMIT )) ; then 
     display "   Trusted pool detached..." $LOG_INFO
   else
-    display "   ERROR: Trusted pool NOT detached..." $LOG_FORCE
-    exit 15
+    display "   $err_warn: Trusted pool NOT detached..." $LOG_FORCE
+    (( first != 0 )) && exit 15
+    rtn=1
   fi
+  return $rtn
 }
 
 # verify_pool_create: there are timing windows when using ssh and the gluster
@@ -621,6 +635,27 @@ function verify_vol_started(){
   fi
 }
 
+# verify_umounts: given the passed in node, verify that the glusterfs and
+# brick umounts succeeded. 
+#
+function verify_unmounts(){
+
+  local node=$1 # required
+  local out; local errcnt=0
+
+  if grep -qs $GLUSTER_MNT /proc/mounts ; then
+    display "ERROR: $GLUSTER_MNT still mounted" $LOG_FORCE
+    ((errcnt++))
+  fi
+  if grep -qs $BRICK_MNT /proc/mounts ; then
+    display "ERROR: $BRICK_MNT still mounted" $LOG_FORCE
+    ((errcnt++))
+  fi
+  (( errcnt > 0 )) && exit 27
+
+  display "$GLUSTER_MNT and $BRICK_MNT un-mounted: $out" $LOG_INFO
+}
+
 # verify_gluster_mnt: given the passed in node, verify that the glusterfs
 # mount succeeded. This mount is important for the subsequent chmod and chown
 # on the gluster mount dir to work.
@@ -652,6 +687,7 @@ function verify_gluster_mnt(){
 function cleanup(){
 
   local node=''; local out; local err; local ans='y'
+  local force=''; local loglev # log fence value
 
   if [[ "$ANS_YES" == 'n' ]] ; then
     echo
@@ -694,14 +730,18 @@ function cleanup(){
   # 4) detach nodes on all but firstNode
   display "  -- from node $firstNode:" $LOG_INFO
   display "       detaching all other nodes from trusted pool..." $LOG_INFO
-  out=''
-  for (( i=1; i<$NUMNODES; i++ )); do # starting at 1 not 0
-      out+="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	gluster peer detach ${HOSTS[$i]} 2>&1")"
-      out+="\n"
+  for x in $(seq 0 1); do  # 2nd time through use force option
+      out=''
+      (( x != 0 )) && force='force'
+      for (( i=1; i<$NUMNODES; i++ )); do # starting at 1 not 0
+	  out+="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+	  gluster peer detach ${HOSTS[$i]} $force 2>&1")"
+	  out+="\n"
+      done
+      display "peer detach: $out" $LOG_DEBUG
+      verify_peer_detach $x
+      (( $? == 0 )) && break # detached on 1st try
   done
-  display "peer detach: $out" $LOG_DEBUG
-  verify_peer_detach
 
   # 5) umount vol on every node, if mounted
   # 6) unmount brick_mnt on every node, if xfs mounted
@@ -717,6 +757,7 @@ function cleanup(){
           if grep -qs $BRICK_DIR /proc/mounts ; then
             umount $BRICK_DIR 2>&1
           fi")"
+     verify_umounts $node
   done
   display "umount $GLUSTER_MNT & $BRICK_DIR: $out" $LOG_DEBUG
 }
@@ -1287,9 +1328,6 @@ display '----------------------------------------' $LOG_SUMMARY
 display '--    Begin cluster configuration     --' $LOG_SUMMARY
 display '----------------------------------------' $LOG_SUMMARY
 echo
-
-# make sure glusterd is running on all nodes
-start_gluster
 
 # clean up mounts and volume from previous run, if any...
 if [[ "${SKIP[clean]}" == false ]] ; then

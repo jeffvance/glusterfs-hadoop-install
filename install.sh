@@ -32,7 +32,6 @@ REMOTE_INSTALL_DIR="/tmp/rhs-hadoop-install/" # on each node
 PREP_SH='prep_node.sh' # companion script run on each node
 REMOTE_PREP_SH="$REMOTE_INSTALL_DIR$PREP_SH" # full path
 NUMNODES=0           # number of nodes in hosts file (= trusted pool size)
-bricks=''            # string list of node:/brick-mnts for volume create
 # local logfile on each host, copied from remote host to install-from host
 PREP_NODE_LOG='prep_node.log'
 PREP_NODE_LOG_PATH="${REMOTE_INSTALL_DIR}$PREP_NODE_LOG"
@@ -121,7 +120,7 @@ EOF
 function parse_cmd(){
 
   local OPTIONS='vhqy'
-  local LONG_OPTS='brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,help,version,quiet,debug,clean,mkdirs,users'
+  local LONG_OPTS='brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,help,version,quiet,debug,clean,setup,mkdirs,users'
 
   # defaults (global variables)
   BRICK_DIR='/mnt/brick1'
@@ -189,6 +188,14 @@ function parse_cmd(){
 	    SKIP[install_nodes]=true
 	    SKIP[clean]=false  # <--
 	    SKIP[setup]=true
+	    SKIP[perf]=true
+	    shift; continue
+	;;
+	--setup)
+	    SKIP[report]=true
+	    SKIP[install_nodes]=true
+	    SKIP[clean]=true
+	    SKIP[setup]=false  # <--
 	    SKIP[perf]=true
 	    shift; continue
 	;;
@@ -572,10 +579,11 @@ function verify_pool_created(){
 # cli. This function returns once it has confirmed that $VOLNAME has been
 # created, or a pre-defined number of attempts have been made.
 # $1=exit return from gluster vol create command.
+# $2=string of all bricks
 #
 function verify_vol_created(){
 
-  local volCreateErr=$1
+  local volCreateErr=$1; local bricks="$2"
   local i=0; local SLEEP=2; local LIMIT=$((NUMNODES * 5))
 
   while (( i < LIMIT )) ; do # don't loop forever
@@ -605,7 +613,7 @@ function verify_vol_created(){
 function verify_vol_started(){
 
   local volStartErr=$1
-  local i=0; local out; local SLEEP=2; local LIMIT=$((NUMNODES * 2))
+  local i=0; local out; local SLEEP=2; local LIMIT=$((NUMNODES * 4))
   local FILTER='^Online' # grep filter
   local ONLINE=': Y'     # grep not-match value
 
@@ -977,6 +985,7 @@ function create_hadoop_dirs(){
 function setup(){
 
   local i=0; local node=''; local out; local err
+  local bricks=''
   local dir; local perm; local owner; local uid
   local HBASE_U='hbase'
   local YARN_U='yarn'; local YARN_UID=502
@@ -1011,18 +1020,25 @@ function setup(){
     display "  -- mount $GLUSTER_MNT on all nodes..." $LOG_INFO
     create_trusted_pool
     verify_pool_created
+
     # create vol
+    # first set up bricks string
+    for node in "${HOSTS[@]}"; do
+        bricks+=" $node:$BRICK_MNT"
+    done
     out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
 	gluster volume create $VOLNAME replica $REPLICA_CNT $bricks 2>&1")"
     err=$?
     display "vol create: $out" $LOG_DEBUG
-    verify_vol_created $err
+    verify_vol_created $err "$bricks"
+
     # start vol
     out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
 	gluster --mode=script volume start $VOLNAME 2>&1")"
     err=$?
     display "vol start: $out" $LOG_DEBUG
     verify_vol_started $err
+
     # ownership and permissions must be set *after* the gluster vol is mounted
     for node in "${HOSTS[@]}"; do
 	display "-- $node -- mount volume" $LOG_INFO
@@ -1062,7 +1078,6 @@ function setup(){
 
 # install_nodes: for each node in the hosts file copy the "data" sub-directory
 # and invoke the companion "prep" script. Some global variables are set here:
-#   bricks               = string of all bricks (ip/dir)
 #   DEFERRED_REBOOT_NODE = install-from hostname if install-from node needs
 #     to be rebooted, else not defined
 #   REBOOT_NODES         = array of IPs for all nodes needing to be rebooted,
@@ -1171,11 +1186,6 @@ function install_nodes(){
       display "-- Installing on $node ($ip)"                 $LOG_SUMMARY
       display '--------------------------------------------' $LOG_SUMMARY
       display
-
-      # Append to bricks string. Convention to use a subdir under the XFS
-      # brick, and to name this subdir the same as the volname.
-      bricks+=" $node:$BRICK_MNT"
-
       install_mgmt_node=false
       [[ -n "$MGMT_NODE_IN_POOL" && "$node" == "$MGMT_NODE" ]] && \
 	install_mgmt_node=true

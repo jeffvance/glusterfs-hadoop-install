@@ -444,7 +444,7 @@ function verify_user_uids(){
 #
 function fix_vol_stop_delete(){
 
-  local node; local out
+  local out
 
   display "attempting to fix vol stop/delete error..." $LOG_DEBUG
   display "   re-trying vol stop/delete..." $LOG_DEBUG
@@ -478,8 +478,8 @@ function verify_vol_stop_delete(){
   # verify stop/delete
   while (( i < LIMIT )) ; do # don't loop forever
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	    gluster volume status $VOLNAME")"
-      [[ $? == 1 && "$out" == "$EXPCTD_VOL_STATUS_ERR" ]] && break
+	    gluster volume status $VOLNAME" 2>&1)"
+      [[ $? == 1 && "$out" == "$EXPCT_VOL_STATUS_ERR" ]] && break
       sleep $SLEEP 
       ((i++))
       display "...verify vol stop/delete wait: $((i*SLEEP)) seconds" $LOG_DEBUG

@@ -36,6 +36,21 @@ NUMNODES=0           # number of nodes in hosts file (= trusted pool size)
 PREP_NODE_LOG='prep_node.log'
 PREP_NODE_LOG_PATH="${REMOTE_INSTALL_DIR}$PREP_NODE_LOG"
 
+# DO_BITS globaltask mask: bit set means to do the task associated with it
+DO_BIT=0xff # default is to do all tasks
+
+# define bits in the DO_BITS global for the various perpare tasks
+# note: right-most bit is 0, value is the shift amount
+REPORT_BIT=0
+INSTALL_BIT=1
+CLEAN_BIT=2
+SETUP_BIT=3
+SETUP_XFS_BIT=4
+SETUP_VOL_BIT=5
+SETUP_USERS_BIT=6
+SETUP_DIRS_BIT=7
+PERF_BIT=8
+
 # source common constants and functions
 source $INSTALL_DIR/functions
 
@@ -60,7 +75,7 @@ EOF
 }
 
 # usage: write full usage/help text to stdout.
-# Note: the --mkdirs, --users, --clean options are not yet documented.
+# Note: the --mkdirs, --users, --clean, --setup  options are not ydocumented.
 #
 function usage(){
 
@@ -184,43 +199,27 @@ function parse_cmd(){
 	    VERBOSE=$LOG_DEBUG; shift; continue
 	;;
 	--clean)
-	    SKIP[report]=true
-	    SKIP[install_nodes]=true
-	    SKIP[clean]=false  # <--
-	    SKIP[setup]=true
-	    SKIP[perf]=true
+	    let "DO_BITS=((1<<CLEAN_BIT))" # all zeros but clean bit
 	    shift; continue
 	;;
 	--setup)
-	    SKIP[report]=true
-	    SKIP[install_nodes]=true
-	    SKIP[clean]=true
-	    SKIP[setup]=false  # <--
-	    SKIP[perf]=true
+	    let "DO_BITS=((1<<SETUP_BIT))" # all zeros but setup bit
+            # set all of the setup bits
+            let "DO_BITS=((DO_BITS | (1<<SETUP_XFS_BIT)))"
+            let "DO_BITS=((DO_BITS | (1<<SETUP_VOL_BIT)))"
+            let "DO_BITS=((DO_BITS | (1<<SETUP_USERS_BIT)))"
+            let "DO_BITS=((DO_BITS | (1<<SETUP_DIRS_BIT)))" 
+echo "****DO_BITS=$DO_BITS"
 	    shift; continue
 	;;
 	--mkdirs)
-	    SKIP[report]=true
-	    SKIP[install_nodes]=true
-	    SKIP[clean]=true
-	    SKIP[setup]=false  # <--
-	    SKIP[setup.xfs]=true
-	    SKIP[setup.vol]=true
-	    SKIP[setup.users]=true
-	    SKIP[setup.dirs]=false  # <--
-	    SKIP[perf]=true
+	    let "DO_BITS=((1<<SETUP_BIT))" # all zeros but setup bit
+            let "DO_BITS=((DO_BITS | (1<<SETUP_DIRS_BIT)))" # set dir bit
 	    shift; continue
 	;;
 	--users)
-	    SKIP[report]=true
-	    SKIP[install_nodes]=true
-	    SKIP[clean]=true
-	    SKIP[setup]=false  # <--
-	    SKIP[setup.xfs]=true
-	    SKIP[setup.vol]=true
-	    SKIP[setup.users]=false # <--
-	    SKIP[setup.dirs]=true
-	    SKIP[perf]=true
+	    let "DO_BITS=((1<<SETUP_BIT))" # all zeros but setup bit
+            let "DO_BITS=((DO_BITS | (1<<SETUP_USERS_BIT)))" # set users bit
 	    shift; continue
 	;;
 	--)  # no more args to parse
@@ -349,8 +348,10 @@ function report_deploy_values(){
 }
 
 # function kill_gluster: make sure glusterd and related processes are killed.
+# Optional $1 arg is applied to killall, typically -9.
 function kill_gluster(){
 
+  local kill_arg="$1"
   local node; local out
   local GLUSTER_PROCESSES='glusterd glusterfs glusterfsd'
 
@@ -358,7 +359,7 @@ function kill_gluster(){
   display "Stopping gluster processes on all nodes..." $LOG_INFO
   for node in "${HOSTS[@]}"; do
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	    killall $GLUSTER_PROCESSES" 2>&1)"
+	    killall $kill_arg $GLUSTER_PROCESSES" 2>&1)"
       sleep 2
       if ps -C ${GLUSTER_PROCESSES// /,} >& /dev/null ; then
 	display "ERROR on node $node: 1 or more gluster processes not killed" \
@@ -447,19 +448,33 @@ function verify_user_uids(){
   done
 }
 
-# fix_vol_stop_delete: use force to re-attempt to stop/delete the volume.
+# fix_vol_stop_delete: re-kill gluster using -9, rm current state in /var/lib/
+# glusterd/*, and use the force option to re-attempt to stop/delete the volume.
+# Note: glusterfs log files not deleted.
 #
 function fix_vol_stop_delete(){
 
-  local out
+  local out; local node
+  local GLUSTERD_FILES='/var/lib/glusterd/*'
 
   display "attempting to fix vol stop/delete error..." $LOG_DEBUG
+
+  # delete current gluster state using sledge hammer approach
+  display "   re-starting gluster, deleting current state..." $LOG_DEBUG
+  for node in "${HOSTS[@]}"; do
+      out="$(ssh -oStrictHostKeyChecking=no root@$node "
+	rm -rf $GLUSTERD_FILES 2>&1
+	killall -9 -r gluster 2>&1
+ 	sleep 1
+	service glusterd start 2>&1")"
+  done
+  
   display "   re-trying vol stop/delete..." $LOG_DEBUG
   out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
 	gluster --mode=script volume stop $VOLNAME force 2>&1
-        sleep 3
+        sleep 2
 	gluster --mode=script volume delete $VOLNAME 2>&1")"
-  sleep 3
+  sleep 2
 }
 
 # verify_vol_stop_delete: there are timing windows when using ssh and the
@@ -473,10 +488,10 @@ function verify_vol_stop_delete(){
   local stop_del_err=$1; local errmsg="$2"
   local out; local i=0; local SLEEP=2; local LIMIT=$((NUMNODES * 2))
   local EXPCT_VOL_STATUS_ERR="Volume $VOLNAME does not exist"
-  local EXPCT_VOL_DEL_MSG="volume delete: ${VOLNAME}: success"
+  local VOL_ERR_STR='Staging failed on '
 
   if (( stop_del_err != 0 )) && \
-      grep -qsv -E "$EXPCT_VOL_DEL_MSG|$EXPCT_VOL_STATUS_ERR" <<<$errmsg ; then
+      grep -qs "$VOL_ERR_STR" <<<$errmsg ; then
     # unexpected vol stop/del output so kill gluster processes, restart
     # glusterd, and re-try the vol stop/delete
     fix_vol_stop_delete
@@ -503,11 +518,9 @@ function verify_vol_stop_delete(){
 # verify_peer_detach: there are timing windows when using ssh and the gluster
 # cli. This function returns once it has confirmed that the number of nodes in
 # the trusted pool is zero, or a predefined number of attempts have been made.
-# $1 = 0 or >0. If $1==0 this is the first time attempting to verify the peer
-# detach and what would be considered errors are treated as warnings. When
-# $1 is > 0 then the caller will likely exit upon an error.
-# Note: the caller is expected to invoke this function capturing its output in
-#   a variable, and to call display() with the captured output.
+# $1=peer detach iteration (0 == 1st attempt)
+# Note: this function returns 0 if the peer detach is confirmed, else 1. Also,
+#   if the pool has not detached on the 2nd attempt this function exists.
 #
 function verify_peer_detach(){
 
@@ -584,11 +597,11 @@ function verify_pool_created(){
 function verify_vol_created(){
 
   local volCreateErr=$1; local bricks="$2"
-  local i=0; local SLEEP=2; local LIMIT=$((NUMNODES * 5))
+  local i=0; local out; local SLEEP=2; local LIMIT=$((NUMNODES * 5))
 
   while (( i < LIMIT )) ; do # don't loop forever
-      ssh -oStrictHostKeyChecking=no root@$firstNode "
-	gluster volume info $VOLNAME >& /dev/null"
+      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+	gluster volume info $VOLNAME >/dev/null")"
       (( $? == 0 )) && break
       sleep $SLEEP
       ((i++))
@@ -608,14 +621,20 @@ function verify_vol_created(){
 # cli. This function returns once it has confirmed that $VOLNAME has been
 # started, or a pre-defined number of attempts have been made. A volume is
 # considered started once all bricks are online.
-# $1=exit return from gluster vol start command.
+# $1=vol start iteration (0 == 1st attempt)
+# $2=exit return from gluster vol start command.
+# Note: this function returns 0 if the vol start is confirmed, else 1. Also,
+#   if the vol has not started on the 2nd attempt this function exists.
 #
 function verify_vol_started(){
 
-  local volStartErr=$1
-  local i=0; local out; local SLEEP=2; local LIMIT=$((NUMNODES * 4))
+  local first=$1; local volStartErr=$2
+  local err_warn='WARN'; local rtn=0
+  local i=0; local out; local SLEEP=4; local LIMIT=$((NUMNODES * 5))
   local FILTER='^Online' # grep filter
   local ONLINE=': Y'     # grep not-match value
+
+  (( first != 0 )) && err_warn='ERROR'
 
   while (( i < LIMIT )) ; do # don't loop forever
       # grep for Online status != Y
@@ -638,9 +657,11 @@ function verify_vol_started(){
   if (( i < LIMIT )) ; then 
     display "   Volume \"$VOLNAME\" started..." $LOG_INFO
   else
-    display "   ERROR: Volume \"$VOLNAME\" start failed with error $volStartErr" $LOG_FORCE
-    exit 24
+    display "   $err_warn: Volume \"$VOLNAME\" start failed with error $volStartErr" $LOG_FORCE
+    (( first != 0 )) && exit 24
+    rtn=1
   fi
+  return $rtn
 }
 
 # verify_umounts: given the passed in node, verify that the glusterfs and
@@ -739,7 +760,7 @@ function cleanup(){
   # 4) detach nodes on all but firstNode
   display "  -- from node $firstNode:" $LOG_INFO
   display "       detaching all other nodes from trusted pool..." $LOG_INFO
-  for x in $(seq 0 1); do  # 2nd time through use force option
+  for x in {0,1}; do  # 2nd time through use force option
       out=''
       (( x != 0 )) && force='force'
       for (( i=1; i<$NUMNODES; i++ )); do # starting at 1 not 0
@@ -815,14 +836,26 @@ function xfs_brick_dirs_mnt(){
       display " * mkfs.xfs on $brick: $out" $LOG_DEBUG
 
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
-	    mkdir -p $BRICK_MNT 2>&1")"
+	    mkdir -p $BRICK_MNT 2>&1
+            if [[ \$? == 0 && -d $BRICK_MNT ]] ; then
+              echo ok
+            else
+              echo 'directory not created'
+              exit 1
+            fi ")"
       (( $? != 0 )) && {
 	display "ERROR: $node: mkdir $BRICK_MNT: $out" $LOG_FORCE; exit 36; }
       display " * mkdir $BRICK_MNT: $out" $LOG_DEBUG
 
       # make vol mnt dir
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
-	    mkdir -p $GLUSTER_MNT 2>&1")"
+	    mkdir -p $GLUSTER_MNT 2>&1
+            if [[ \$? == 0 && -d $GLUSTER_MNT ]] ; then
+              echo ok
+            else
+              echo 'directory not created'
+              exit 1
+            fi ")"
       (( $? != 0 )) && {
 	display "ERROR: $node: mkdir $GLUSTER_MNT: $out" $LOG_FORCE; exit 39; }
       display " * mkdir $GLUSTER_MNT: $out" $LOG_DEBUG
@@ -852,7 +885,13 @@ function xfs_brick_dirs_mnt(){
       display " * brick mount: $out" $LOG_DEBUG
 
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
-	mkdir -p $MAPRED_SCRATCH_DIR 2>&1")"
+	    mkdir -p $MAPRED_SCRATCH_DIR 2>&1
+            if [[ \$? == 0 && -d $MAPRED_SCRATCH_DIR ]] ; then
+              echo ok
+            else
+              echo 'directory not created'
+              exit 1
+            fi")"
       (( $? != 0 )) && {
         display "ERROR: $node: mkdir $MAPRED_SCRATCH_DIR: $out" $LOG_FORCE;
         exit 48; }
@@ -978,13 +1017,13 @@ function create_hadoop_dirs(){
 #  13) chown to mapred:hadoop the above **
 # ** gluster cmd only done once for entire pool; all other cmds executed on
 #    each node
-# NOTE: the SKIP variable controls which features of setup() are done.
+# NOTE: the DO_BITS variable controls which features of setup() are done.
 # TODO: limit disk space usage in MapReduce scratch dir so that it does not
 #       consume too much of the shared storage space.
 #
 function setup(){
 
-  local i=0; local node=''; local out; local err
+  local i=0; local node=''; local out; local err; local force=''
   local bricks=''
   local dir; local perm; local owner; local uid
   local HBASE_U='hbase'
@@ -994,7 +1033,7 @@ function setup(){
   local MAPRED_U='mapred'
   local MR_USERS=("$MAPRED_U" "$YARN_U" "$HBASE_U")
 
-  if [[ "${SKIP[setup.xfs]}" == false ]] ; then
+  if (( DO_SETUP_XFS )) ; then
     # 1) mkfs.xfs brick_dev on every node
     # 2) mkdir brick_dir and vol_mnt on every node
     # 3) append brick_dir and gluster mount entries to fstab on every node
@@ -1008,7 +1047,7 @@ function setup(){
     xfs_brick_dirs_mnt
   fi
 
-  if [[ "${SKIP[setup.vol]}" == false ]] ; then
+  if (( DO_SETUP_VOL )) ;then
     # 6) create trusted pool from first node
     # 7) create vol on a single node
     # 8) start vol on a single node
@@ -1033,11 +1072,15 @@ function setup(){
     verify_vol_created $err "$bricks"
 
     # start vol
-    out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	gluster --mode=script volume start $VOLNAME 2>&1")"
-    err=$?
-    display "vol start: $out" $LOG_DEBUG
-    verify_vol_started $err
+    for x in {0,1}; do  # 2nd time through use force option
+ 	(( x != 0 )) && force='force'
+	out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+  	      gluster --mode=script volume start $VOLNAME $force 2>&1")"
+	err=$?
+	display "vol start: $out" $LOG_DEBUG
+	verify_vol_started $x $err
+	(( $? == 0 )) && break # started on 1st try
+    done
 
     # ownership and permissions must be set *after* the gluster vol is mounted
     for node in "${HOSTS[@]}"; do
@@ -1046,7 +1089,7 @@ function setup(){
     done
   fi
 
-  if [[ "${SKIP[setup.users]}" == false ]] ; then
+  if (( DO_SETUP_USERS )) ; then
     # 10) create the mapred and yarn users, and the hadoop group on each node
     display "  -- on all nodes:"                         $LOG_INFO
     display "       create users and group as needed..." $LOG_INFO
@@ -1065,7 +1108,7 @@ function setup(){
     verify_user_uids ${MR_USERS[@]}
   fi
 
-  if [[ "${SKIP[setup.dirs]}" == false ]] ; then
+  if (( DO_SETUP_DIRS )) ; then
     # 11) create distributed mapred/system and mr-history/done dirs
     # 12) chmod on the gluster mnt and the mapred scracth dir
     # 13) chown on the gluster mnt and mapred scratch dir
@@ -1291,17 +1334,8 @@ echo
 # flag if we're doing an rhs related install, set before parsing args
 [[ -d glusterfs ]] && RHS_INSTALL=false || RHS_INSTALL=true
 
-# define global assoc array indicating which feature, if any, to skip
-declare -A SKIP=() # default is not skip any tasks/features
-SKIP[report]=false
-SKIP[install_nodes]=false
-SKIP[clean]=false
-SKIP[setup]=false
-SKIP[setup.xfs]=false
-SKIP[setup.vol]=false
-SKIP[setup.users]=false
-SKIP[setup.dirs]=false
-SKIP[perf]=false
+# global bit mask indicating which steps to do, default is all
+DO_BITS=0xffff
 
 parse_cmd $@
 
@@ -1327,10 +1361,21 @@ BRICK_MNT=$BRICK_DIR/$VOLNAME
 MAPRED_SCRATCH_DIR="$BRICK_DIR/mapredlocal" # xfs but not distributed
 firstNode=${HOSTS[0]}
 
-[[ "${SKIP[report]}" == false ]] && report_deploy_values
+# set DO_xxx globals based on DO_BITS
+let "DO_REPORT=(((DO_BITS>>REPORT_BIT) % 2))" # 1 --> do it
+let "DO_INSTALL=(((DO_BITS>>INSTALL_BIT) % 2))"
+let "DO_CLEAN=(((DO_BITS>>CLEAN_BIT) % 2))"
+let "DO_SETUP=(((DO_BITS>>SETUP_BIT) % 2))" # 0 --> defeats all setup tasks
+let "DO_SETUP_XFS=(((DO_BITS>>SETUP_XFS_BIT) % 2))"
+let "DO_SETUP_VOL=(((DO_BITS>>SETUP_VOL_BIT) % 2))"
+let "DO_SETUP_USERS=(((DO_BITS>>SETUP_USERS_BIT) % 2))"
+let "DO_SETUP_DIRS=(((DO_BITS>>SETUP_DIRS_BIT) % 2))"
+let "DO_PERF=(((DO_BITS>>PERF_BIT) % 2))"
+
+(( DO_REPORT )) && report_deploy_values
 
 # per-node install and config...
-[[ "${SKIP[install_nodes]}" == false ]] && install_nodes
+(( DO_INSTALL )) && install_nodes
 
 echo
 display '----------------------------------------' $LOG_SUMMARY
@@ -1339,26 +1384,26 @@ display '----------------------------------------' $LOG_SUMMARY
 echo
 
 # clean up mounts and volume from previous run, if any...
-if [[ "${SKIP[clean]}" == false ]] ; then
+if (( DO_CLEAN )) ; then
   display "-- Cleaning up (un-mounting, deleting volume, etc.)" $LOG_SUMMARY
   cleanup
 fi
 
 # set up mounts and create volume
 echo
-if [[ "${SKIP[setup]}" == false ]] ; then
+if (( DO_SETUP )) ; then
   display "-- Setting up brick and volume mounts, creating and starting volume" $LOG_SUMMARY
   setup
 fi
 
 echo
-if [[ "${SKIP[perf]}" == false ]] ; then
+if (( DO_PERF )) ; then
   display "-- Performance config..." $LOG_SUMMARY
   perf_config
 fi
 
 # reboot nodes if needed
-[[ "${SKIP[install_nodes]}" == false ]] && reboot_nodes
+(( DO_INSTALL )) && reboot_nodes
 
 echo
 display "**** This script can be re-run anytime! ****" $LOG_REPORT

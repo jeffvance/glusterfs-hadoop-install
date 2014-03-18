@@ -627,26 +627,29 @@ function verify_vol_created(){
 }
 
 # verify_vol_started: there are timing windows when using ssh and the gluster
-# cli. This function returns once it has confirmed that $VOLNAME has been
-# started, or a pre-defined number of attempts have been made. A volume is
-# considered started once all bricks are online.
-# $1=vol start iteration (0 == 1st attempt)
-# $2=max number of attempts
-# $3=exit return from gluster vol start command.
-# Note: this function returns 0 if the vol start is confirmed, else 1. Also,
-#   if the vol has not started on the 2nd attempt this function exists.
+# cli. This function is expected to be called in a loop and thus it can return
+# even when the volume is not started. Examples of this include a previous
+# transaction (presumably the vol create) is still in progress, and since the
+# cli doesn't queue the vol start, the vol start has to be re-executed. It is
+# also possible to get a "vol not started" error (from the vol status cmd)
+# which just means that the vol start has to be re-tried. If the max number
+# of attempts have been made (the "last" arg == true) and if the vol is still
+# not started this function exits with an error. A volume is considered started
+# once all bricks are online, though another way to detect this could be to
+# check the Status: value of the vol info command.
+# Args:
+#   $1=true/false if this is the last attempt
+#   $2=exit return from gluster vol start command.
 #
 function verify_vol_started(){
 
-  local attempt=$1; local max_tries=$2; local volStartErr=$2
+  local last=$1; local volStartErr=$2
   local err_warn='WARN'; local rtn=0
   local i=0; local out; local SLEEP=4; local LIMIT=$((NUMNODES * 2))
   local FILTER='^Online' # grep filter
   local ONLINE=': Y'     # grep not-match value
   local TRANS_IN_PROGRESS='Another transaction is in progress'
   local VOL_NOT_STARTED="Volume $VOLNAME is not started"
-
-  (( attempt == $max_tries )) && err_warn='ERROR'
 
   while (( 1==1 )); do  # until an earlier transaction has completed...
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
@@ -663,11 +666,8 @@ function verify_vol_started(){
      display "...cluster slow, waiting to re-try start: $((i*SLEEP)) seconds" \
 	$LOG_DEBUG
   done
-  if (( i > 0 )) ; then # a previous transaction was in progress
-    return 1  # retry vol start
-  fi
+  (( i > 0 )) && return 1 # previous transaction was in progress, retry start
 
-  i=0
   while (( i < LIMIT )) ; do # don't loop forever
       # grep for Online status != Y
       # note: need to use scratch file rather than a variable since the
@@ -689,8 +689,9 @@ function verify_vol_started(){
   if (( i < LIMIT )) ; then 
     display "   Volume \"$VOLNAME\" started..." $LOG_INFO
   else
+    [[ last == true ]] && err_warn='ERROR'
     display "   $err_warn: Volume \"$VOLNAME\" start failed with error $volStartErr" $LOG_FORCE
-    (( attempt == max_tries )) && exit 24
+    [[ last == true ]] && exit 24
     rtn=1
   fi
   return $rtn
@@ -1048,7 +1049,8 @@ function create_hadoop_dirs(){
 #
 function setup(){
 
-  local i=0; local node=''; local out; local err; local force=''
+  local x; local last_try=false; local i=0; local node=''
+  local out; local err; local force=''
   local bricks=''
   local dir; local perm; local owner; local uid
   local HBASE_U='hbase'
@@ -1098,12 +1100,12 @@ function setup(){
 
     # start vol
     for x in $(seq 4); do  # last time through use force option
- 	(( x == 4 )) && force='force'
+ 	(( x == 4 )) && { last_try=true; force='force'; }
 	out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
   	      gluster --mode=script volume start $VOLNAME $force 2>&1")"
 	err=$?
 	display "vol start: $out" $LOG_DEBUG
-	verify_vol_started $x 4 $err
+	verify_vol_started $last_try $err
 	(( $? == 0 )) && break # vol started
     done
 

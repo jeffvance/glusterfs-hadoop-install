@@ -657,6 +657,7 @@ function verify_vol_started(){
   local ONLINE=': Y'     # grep not-match value
   local TRANS_IN_PROGRESS='Another transaction is in progress'
   local VOL_NOT_STARTED="Volume $VOLNAME is not started"
+  local STAGING_FAILED='Staging failed on'
 
   while (( 1==1 )); do  # until an earlier transaction has completed...
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
@@ -665,17 +666,20 @@ function verify_vol_started(){
 	i=1 # force return and re-try vol start
 	break
       fi
-      if ! grep -qs "$TRANS_IN_PROGRESS" <<<$out; then # not trans-in-progress
-	break
+      # check if staging error or transaction-in-progress error
+      if ! grep -qs -E "$TRANS_IN_PROGRESS|$STAGING_FAILED" <<<$out; then
+	break # not above errors so exit loop
       fi
       sleep $SLEEP
      ((i++))
      display "...cluster slow, waiting to re-try start: $((i*SLEEP)) seconds" \
 	$LOG_DEBUG
   done
-echo "***** done 1st loop: vol start out=$out"
-  [[ $i > 0 && $last == false ]] && \
-	return 1 # prev transaction was in progress, retry start
+  if [[ $i > 0 && $last == false ]] ; then
+    # previous transaction was in progress, retry start
+    display "   re-trying volume start..." $LOG_DEBUG
+    return 1
+  fi
 
   while (( i < LIMIT )) ; do # don't loop forever
       # grep for Online status != Y
@@ -1108,8 +1112,8 @@ function setup(){
     verify_vol_created $err "$bricks"
 
     # start vol
-    for x in $(seq 3); do  # last time through use force option
- 	(( x == 3 )) && { last_try=true; force='force'; }
+    for x in $(seq 4); do  # last time through use force option
+ 	(( x == 4 )) && { last_try=true; force='force'; }
 	out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
   	      gluster --mode=script volume start $VOLNAME $force 2>&1")"
 	err=$?
@@ -1336,7 +1340,7 @@ function perf_config(){
   err=$?
   display "gluster perf: $out" $LOG_DEBUG
   if (( err != 0 )) ; then
-    display "WARN: gluster performance config error $err" $LOG_FORCE
+    display "WARN $err: gluster performance config warning" $LOG_FORCE
   fi
 }
 

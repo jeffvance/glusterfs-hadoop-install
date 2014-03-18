@@ -75,7 +75,8 @@ EOF
 }
 
 # usage: write full usage/help text to stdout.
-# Note: the --mkdirs, --users, --clean, --setup  options are not ydocumented.
+# Note: the --mkdirs, --users, --clean, --setup, --perf  options are not yet
+#   documented.
 #
 function usage(){
 
@@ -135,7 +136,7 @@ EOF
 function parse_cmd(){
 
   local OPTIONS='vhqy'
-  local LONG_OPTS='brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,help,version,quiet,debug,clean,setup,mkdirs,users'
+  local LONG_OPTS='brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,help,version,quiet,debug,clean,setup,mkdirs,users,perf'
   local task_opt_seen=false
 
   # defaults (global variables)
@@ -227,6 +228,12 @@ function parse_cmd(){
 	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
 	    let "DO_BITS=((DO_BITS | (1<<SETUP_BIT)))"
             let "DO_BITS=((DO_BITS | (1<<SETUP_USERS_BIT)))" # set users bit
+            task_opt_seen=true
+	    shift; continue
+	;;
+	--perf)
+	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
+	    let "DO_BITS=((DO_BITS | (1<<PERF_BIT)))"
             task_opt_seen=true
 	    shift; continue
 	;;
@@ -645,7 +652,7 @@ function verify_vol_started(){
 
   local last=$1; local volStartErr=$2
   local err_warn='WARN'; local rtn=0
-  local i=0; local out; local SLEEP=4; local LIMIT=$((NUMNODES * 2))
+  local i=0; local out; local SLEEP=2; local LIMIT=$((NUMNODES * 2))
   local FILTER='^Online' # grep filter
   local ONLINE=': Y'     # grep not-match value
   local TRANS_IN_PROGRESS='Another transaction is in progress'
@@ -666,7 +673,8 @@ function verify_vol_started(){
      display "...cluster slow, waiting to re-try start: $((i*SLEEP)) seconds" \
 	$LOG_DEBUG
   done
-  (( i > 0 )) && return 1 # previous transaction was in progress, retry start
+  [[ $i > 0 && $last == false ]] && \
+	return 1 # prev transaction was in progress, retry start
 
   while (( i < LIMIT )) ; do # don't loop forever
       # grep for Online status != Y
@@ -689,9 +697,9 @@ function verify_vol_started(){
   if (( i < LIMIT )) ; then 
     display "   Volume \"$VOLNAME\" started..." $LOG_INFO
   else
-    [[ last == true ]] && err_warn='ERROR'
+    [[ $last == true ]] && err_warn='ERROR'
     display "   $err_warn: Volume \"$VOLNAME\" start failed with error $volStartErr" $LOG_FORCE
-    [[ last == true ]] && exit 24
+    [[ $last == true ]] && exit 24
     rtn=1
   fi
   return $rtn
@@ -1099,8 +1107,8 @@ function setup(){
     verify_vol_created $err "$bricks"
 
     # start vol
-    for x in $(seq 4); do  # last time through use force option
- 	(( x == 4 )) && { last_try=true; force='force'; }
+    for x in $(seq 3); do  # last time through use force option
+ 	(( x == 3 )) && { last_try=true; force='force'; }
 	out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
   	      gluster --mode=script volume start $VOLNAME $force 2>&1")"
 	err=$?

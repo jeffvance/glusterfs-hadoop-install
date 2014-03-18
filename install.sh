@@ -680,7 +680,7 @@ function verify_vol_started(){
             else
               exit 1
  	    fi")"
-      [[ $? == 0 && "$out" == 0 ]] && break # exit loop
+      [[ "$out" == 0 ]] && break # exit loop
       sleep $SLEEP
       ((i++))
       display "...verify vol start wait: $((i*SLEEP)) seconds" $LOG_DEBUG

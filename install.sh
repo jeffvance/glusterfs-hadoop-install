@@ -209,7 +209,6 @@ function parse_cmd(){
             let "DO_BITS=((DO_BITS | (1<<SETUP_VOL_BIT)))"
             let "DO_BITS=((DO_BITS | (1<<SETUP_USERS_BIT)))"
             let "DO_BITS=((DO_BITS | (1<<SETUP_DIRS_BIT)))" 
-echo "****DO_BITS=$DO_BITS"
 	    shift; continue
 	;;
 	--mkdirs)
@@ -630,7 +629,7 @@ function verify_vol_started(){
 
   local first=$1; local volStartErr=$2
   local err_warn='WARN'; local rtn=0
-  local i=0; local out; local SLEEP=4; local LIMIT=$((NUMNODES * 5))
+  local i=0; local out; local SLEEP=2; local LIMIT=$((NUMNODES * 3))
   local FILTER='^Online' # grep filter
   local ONLINE=': Y'     # grep not-match value
 
@@ -813,6 +812,7 @@ function create_trusted_pool(){
 #   mkdir brick_dir and vol_mnt on every node
 #   append brick_dir and gluster mount entries to fstab on every node
 #   mount brick on every node
+#   mkdir brick1/<volname>dir on every node (done after brick mount)
 #   mkdir mapredlocal scratch dir on every node (done after brick mount)
 # Args: $1=node (hostname)
 #
@@ -835,30 +835,21 @@ function xfs_brick_dirs_mnt(){
       fi
       display " * mkfs.xfs on $brick: $out" $LOG_DEBUG
 
+      # make brick and vol mnt dirs
+      # note: must be done before the brick mount
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
-	    mkdir -p $BRICK_MNT 2>&1
-            if [[ \$? == 0 && -d $BRICK_MNT ]] ; then
+	    mkdir -p $BRICK_DIR $GLUSTER_MNT 2>&1
+            if [[ -d $BRICK_DIR && -d $GLUSTER_MNT ]] ; then
               echo ok
             else
-              echo 'directory not created'
+              echo 'directories not created'
               exit 1
             fi ")"
       (( $? != 0 )) && {
-	display "ERROR: $node: mkdir $BRICK_MNT: $out" $LOG_FORCE; exit 36; }
-      display " * mkdir $BRICK_MNT: $out" $LOG_DEBUG
-
-      # make vol mnt dir
-      out="$(ssh -oStrictHostKeyChecking=no root@$node "
-	    mkdir -p $GLUSTER_MNT 2>&1
-            if [[ \$? == 0 && -d $GLUSTER_MNT ]] ; then
-              echo ok
-            else
-              echo 'directory not created'
-              exit 1
-            fi ")"
-      (( $? != 0 )) && {
-	display "ERROR: $node: mkdir $GLUSTER_MNT: $out" $LOG_FORCE; exit 39; }
-      display " * mkdir $GLUSTER_MNT: $out" $LOG_DEBUG
+	display "ERROR on $node: mkdir $BRICK_DIR & $GLUSTER_MNT: $out" \
+		$LOG_FORCE;
+	exit 36; }
+      display " * mkdir $BRICK_DIR & $GLUSTER_MNT: $out" $LOG_DEBUG
 
       # append brick and gluster mounts to fstab
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
@@ -873,29 +864,30 @@ function xfs_brick_dirs_mnt(){
 	display "ERROR: $node: append fstab: $out" $LOG_FORCE; exit 42; }
       display " * append fstab: $out" $LOG_DEBUG
 
-      # Note: mapred scratch dir must be created *after* the brick is
-      # mounted; otherwise, mapred dir will be "hidden" by the mount.
-      # Also, permissions and owner must be set *after* the gluster dir 
-      # is mounted for the same reason.
+      # Note: brick mnt & mapred scratch dir must be created after the brick is
+      # mounted; otherwise, these dirs will be "hidden" by the mount. Also, 
+      # permissions and owner must be set *after* the gluster dir is mounted
+      # for the same reason.
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
 	    mount $brick 2>&1")" # mount via fstab
       (( $? != 0 )) && {
-	display "ERROR: $node: mount $brick as $BRICK_DIR: $out" $LOG_FORCE;
+	display "ERROR on $node: mount $brick as $BRICK_DIR: $out" $LOG_FORCE;
 	exit 45; }
       display " * brick mount: $out" $LOG_DEBUG
 
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
-	    mkdir -p $MAPRED_SCRATCH_DIR 2>&1
-            if [[ \$? == 0 && -d $MAPRED_SCRATCH_DIR ]] ; then
+	    mkdir -p $BRICK_MNT $MAPRED_SCRATCH_DIR 2>&1
+            if [[ -d $BRICK_MNT && -d $MAPRED_SCRATCH_DIR ]] ; then
               echo ok
             else
-              echo 'directory not created'
+              echo 'directories not created'
               exit 1
             fi")"
       (( $? != 0 )) && {
-        display "ERROR: $node: mkdir $MAPRED_SCRATCH_DIR: $out" $LOG_FORCE;
+        display "ERROR on $node: mkdir $BRICK_MNT & $MAPRED_SCRATCH_DIR: $out" \
+		$LOG_FORCE;
         exit 48; }
-      display " * mkdir $MAPRED_SCRATCH_DIR: $out" $LOG_DEBUG
+      display " * mkdir $BRICK_MNT & $MAPRED_SCRATCH_DIR: $out" $LOG_DEBUG
   done
 }
 

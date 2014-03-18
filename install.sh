@@ -136,6 +136,7 @@ function parse_cmd(){
 
   local OPTIONS='vhqy'
   local LONG_OPTS='brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,help,version,quiet,debug,clean,setup,mkdirs,users'
+  local task_opt_seen=false
 
   # defaults (global variables)
   BRICK_DIR='/mnt/brick1'
@@ -199,26 +200,34 @@ function parse_cmd(){
 	    VERBOSE=$LOG_DEBUG; shift; continue
 	;;
 	--clean)
-	    let "DO_BITS=((1<<CLEAN_BIT))" # all zeros but clean bit
+	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
+	    let "DO_BITS=((DO_BITS | (1<<CLEAN_BIT)))"
+            task_opt_seen=true
 	    shift; continue
 	;;
 	--setup)
-	    let "DO_BITS=((1<<SETUP_BIT))" # all zeros but setup bit
-            # set all of the setup bits
+	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
+	    let "DO_BITS=((DO_BITS | (1<<SETUP_BIT)))"
+            # set all of the setup sub-task bits
             let "DO_BITS=((DO_BITS | (1<<SETUP_XFS_BIT)))"
             let "DO_BITS=((DO_BITS | (1<<SETUP_VOL_BIT)))"
             let "DO_BITS=((DO_BITS | (1<<SETUP_USERS_BIT)))"
             let "DO_BITS=((DO_BITS | (1<<SETUP_DIRS_BIT)))" 
+            task_opt_seen=true
 	    shift; continue
 	;;
 	--mkdirs)
-	    let "DO_BITS=((1<<SETUP_BIT))" # all zeros but setup bit
+	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
+	    let "DO_BITS=((DO_BITS | (1<<SETUP_BIT)))"
             let "DO_BITS=((DO_BITS | (1<<SETUP_DIRS_BIT)))" # set dir bit
+            task_opt_seen=true
 	    shift; continue
 	;;
 	--users)
-	    let "DO_BITS=((1<<SETUP_BIT))" # all zeros but setup bit
+	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
+	    let "DO_BITS=((DO_BITS | (1<<SETUP_BIT)))"
             let "DO_BITS=((DO_BITS | (1<<SETUP_USERS_BIT)))" # set users bit
+            task_opt_seen=true
 	    shift; continue
 	;;
 	--)  # no more args to parse
@@ -597,11 +606,12 @@ function verify_vol_created(){
 
   local volCreateErr=$1; local bricks="$2"
   local i=0; local out; local SLEEP=2; local LIMIT=$((NUMNODES * 5))
+  local VOL_CREATED='Created'
 
   while (( i < LIMIT )) ; do # don't loop forever
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	gluster volume info $VOLNAME >/dev/null")"
-      (( $? == 0 )) && break
+	gluster volume info $VOLNAME | grep Status:")"
+      [[ $? == 0 && ${out#* } == "$VOL_CREATED" ]] && break # status=created
       sleep $SLEEP
       ((i++))
       display "...verify vol create wait: $((i*SLEEP)) seconds" $LOG_DEBUG
@@ -621,33 +631,56 @@ function verify_vol_created(){
 # started, or a pre-defined number of attempts have been made. A volume is
 # considered started once all bricks are online.
 # $1=vol start iteration (0 == 1st attempt)
-# $2=exit return from gluster vol start command.
+# $2=max number of attempts
+# $3=exit return from gluster vol start command.
 # Note: this function returns 0 if the vol start is confirmed, else 1. Also,
 #   if the vol has not started on the 2nd attempt this function exists.
 #
 function verify_vol_started(){
 
-  local first=$1; local volStartErr=$2
+  local attempt=$1; local max_tries=$2; local volStartErr=$2
   local err_warn='WARN'; local rtn=0
-  local i=0; local out; local SLEEP=2; local LIMIT=$((NUMNODES * 3))
+  local i=0; local out; local SLEEP=4; local LIMIT=$((NUMNODES * 2))
   local FILTER='^Online' # grep filter
   local ONLINE=': Y'     # grep not-match value
+  local TRANS_IN_PROGRESS='Another transaction is in progress'
+  local VOL_NOT_STARTED="Volume $VOLNAME is not started"
 
-  (( first != 0 )) && err_warn='ERROR'
+  (( attempt == $max_tries )) && err_warn='ERROR'
 
+  while (( 1==1 )); do  # until an earlier transaction has completed...
+      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+	    gluster volume status $VOLNAME 2>&1")"
+      if grep -qs "$VOL_NOT_STARTED" <<<$out; then
+	i=1 # force return and re-try vol start
+	break
+      fi
+      if ! grep -qs "$TRANS_IN_PROGRESS" <<<$out; then # not trans-in-progress
+	break
+      fi
+      sleep $SLEEP
+     ((i++))
+     display "...cluster slow, waiting to re-try start: $((i*SLEEP)) seconds" \
+	$LOG_DEBUG
+  done
+  if (( i > 0 )) ; then # a previous transaction was in progress
+    return 1  # retry vol start
+  fi
+
+  i=0
   while (( i < LIMIT )) ; do # don't loop forever
       # grep for Online status != Y
       # note: need to use scratch file rather than a variable since the
       #  variable's content gets flattened (no newlines) and thus the grep -v
       #  won't find a node not online, unless they're all offline.
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	    gluster volume status $VOLNAME detail >vol_status.out
+	    gluster volume status $VOLNAME detail >vol_status.out 2>&1
 	    if (( \$? == 0 )) ; then
 	      grep $FILTER <vol_status.out | grep -v '$ONLINE' | wc -l
             else
-              echo 'vol status error'
+              exit 1
  	    fi")"
-      [[ "$out" == 0 ]] && break # exit loop
+      [[ $? == 0 && "$out" == 0 ]] && break # exit loop
       sleep $SLEEP
       ((i++))
       display "...verify vol start wait: $((i*SLEEP)) seconds" $LOG_DEBUG
@@ -657,7 +690,7 @@ function verify_vol_started(){
     display "   Volume \"$VOLNAME\" started..." $LOG_INFO
   else
     display "   $err_warn: Volume \"$VOLNAME\" start failed with error $volStartErr" $LOG_FORCE
-    (( first != 0 )) && exit 24
+    (( attempt == max_tries )) && exit 24
     rtn=1
   fi
   return $rtn
@@ -1064,14 +1097,14 @@ function setup(){
     verify_vol_created $err "$bricks"
 
     # start vol
-    for x in {0,1}; do  # 2nd time through use force option
- 	(( x != 0 )) && force='force'
+    for x in $(seq 5); do  # last time through use force option
+ 	(( x == 5 )) && force='force'
 	out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
   	      gluster --mode=script volume start $VOLNAME $force 2>&1")"
 	err=$?
 	display "vol start: $out" $LOG_DEBUG
-	verify_vol_started $x $err
-	(( $? == 0 )) && break # started on 1st try
+	verify_vol_started $x 5 $err
+	(( $? == 0 )) && break # vol started
     done
 
     # ownership and permissions must be set *after* the gluster vol is mounted

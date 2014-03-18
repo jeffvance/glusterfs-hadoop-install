@@ -673,6 +673,7 @@ function verify_vol_started(){
      display "...cluster slow, waiting to re-try start: $((i*SLEEP)) seconds" \
 	$LOG_DEBUG
   done
+echo "***** done 1st loop: vol start out=$out"
   [[ $i > 0 && $last == false ]] && \
 	return 1 # prev transaction was in progress, retry start
 

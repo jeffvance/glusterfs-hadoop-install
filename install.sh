@@ -678,7 +678,7 @@ function verify_vol_started(){
 	    if (( \$? == 0 )) ; then
 	      grep $FILTER <vol_status.out | grep -v '$ONLINE' | wc -l
             else
-              exit 1
+              echo 'vol status error'
  	    fi")"
       [[ "$out" == 0 ]] && break # exit loop
       sleep $SLEEP
@@ -1097,13 +1097,13 @@ function setup(){
     verify_vol_created $err "$bricks"
 
     # start vol
-    for x in $(seq 5); do  # last time through use force option
- 	(( x == 5 )) && force='force'
+    for x in $(seq 4); do  # last time through use force option
+ 	(( x == 4 )) && force='force'
 	out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
   	      gluster --mode=script volume start $VOLNAME $force 2>&1")"
 	err=$?
 	display "vol start: $out" $LOG_DEBUG
-	verify_vol_started $x 5 $err
+	verify_vol_started $x 4 $err
 	(( $? == 0 )) && break # vol started
     done
 

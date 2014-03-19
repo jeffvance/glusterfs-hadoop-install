@@ -36,8 +36,8 @@ NUMNODES=0           # number of nodes in hosts file (= trusted pool size)
 PREP_NODE_LOG='prep_node.log'
 PREP_NODE_LOG_PATH="${REMOTE_INSTALL_DIR}$PREP_NODE_LOG"
 
-# DO_BITS globaltask mask: bit set means to do the task associated with it
-DO_BIT=0xff # default is to do all tasks
+# DO_BITS global task mask: bit set means to do the task associated with it
+DO_BITS=0xffff # default is to do all tasks
 
 # define bits in the DO_BITS global for the various perpare tasks
 # note: right-most bit is 0, value is the shift amount
@@ -97,8 +97,10 @@ in the local "hosts" file must include a brick-dev-path.
 EOF
   short_usage
   cat <<EOF
-  brick-dev          : Brick device path where the XFS file system is created.
-                       Eg. /dev/vgName/lvName.
+  brick-dev          : Brick device path where the XFS file system is created,
+                       eg. /dev/vgName/lvName. Optional. May be included in the
+                       local hosts file, per node. If specified on the command
+                       line then the same brick-dev applies to all nodes.
   --brick_mnt <path> : Brick directory. Default: "/mnt/brick1/<volname>".
   --vol-name  <name> : Gluster volume name. Default: "HadoopVol".
   --vol-mnt   <path> : Gluster mount point. Default: "/mnt/glusterfs".
@@ -362,7 +364,7 @@ function report_deploy_values(){
   esac
 }
 
-# function kill_gluster: make sure glusterd and related processes are killed.
+# kill_gluster: make sure glusterd and related processes are killed.
 # Optional $1 arg is applied to killall, typically -9.
 function kill_gluster(){
 
@@ -386,7 +388,7 @@ function kill_gluster(){
   done
 }
 
-# function start_gluster: make sure glusterd is started on all nodes.
+# start_gluster: make sure glusterd is started on all nodes.
 function start_gluster(){
 
   local node; local out; local err
@@ -407,7 +409,7 @@ function start_gluster(){
   done
 }
 
-# function verify_hadoop_gid: check that the gid for the passed-in group is
+# verify_hadoop_gid: check that the gid for the passed-in group is
 # the same on all nodes. Args: $1=group name
 #
 function verify_hadoop_gid(){
@@ -435,7 +437,7 @@ function verify_hadoop_gid(){
   fi
 }
 
-# function verify_user_uids: check that the uid for the passed-in user(s) is
+# verify_user_uids: check that the uid for the passed-in user(s) is
 # the same on all nodes. Args: $@=user names
 #
 function verify_user_uids(){
@@ -463,9 +465,9 @@ function verify_user_uids(){
   done
 }
 
-# fix_vol_stop_delete: re-kill gluster using -9, rm current state in /var/lib/
-# glusterd/*, and use the force option to re-attempt to stop/delete the volume.
-# Note: glusterfs log files not deleted.
+# fix_vol_stop_delete: re-kill gluster using -9, rm current state in
+# /var/lib/glusterd/*, and use the force option to re-attempt to stop/delete
+# the volume. Note: glusterfs log files are not deleted.
 #
 function fix_vol_stop_delete(){
 
@@ -496,17 +498,19 @@ function fix_vol_stop_delete(){
 # gluster cli. This function returns once it has confirmed that the volume has
 # been stopped and deleted successfully, or a predefined number of attempts
 # have been made. An attempt is made to correct a stop/delete failure.
-# Args: 1=exit code from gluster stop/delete commands, 2=output from gluster
+# Args:
+#   1=exit code from gluster stop/delete commands,
+#   2=error output from gluster cli
 #
 function verify_vol_stop_delete(){
 
   local stop_del_err=$1; local errmsg="$2"
   local out; local i=0; local SLEEP=2; local LIMIT=$((NUMNODES * 2))
   local EXPCT_VOL_STATUS_ERR="Volume $VOLNAME does not exist"
-  local VOL_ERR_STR='Staging failed on '
+  local STAGING_FAILED='Staging failed on '
 
   if (( stop_del_err != 0 )) && \
-      grep -qs "$VOL_ERR_STR" <<<$errmsg ; then
+      grep -qs "$STAGING_FAILED" <<<$errmsg ; then
     # unexpected vol stop/del output so kill gluster processes, restart
     # glusterd, and re-try the vol stop/delete
     fix_vol_stop_delete
@@ -535,7 +539,7 @@ function verify_vol_stop_delete(){
 # the trusted pool is zero, or a predefined number of attempts have been made.
 # $1=peer detach iteration (0 == 1st attempt)
 # Note: this function returns 0 if the peer detach is confirmed, else 1. Also,
-#   if the pool has not detached on the 2nd attempt this function exists.
+#   if the pool has not detached on the 2nd attempt this function exits.
 #
 function verify_peer_detach(){
 
@@ -1373,9 +1377,6 @@ echo
 
 # flag if we're doing an rhs related install, set before parsing args
 [[ -d glusterfs ]] && RHS_INSTALL=false || RHS_INSTALL=true
-
-# global bit mask indicating which steps to do, default is all
-DO_BITS=0xffff
 
 parse_cmd $@
 

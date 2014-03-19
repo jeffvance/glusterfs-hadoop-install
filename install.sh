@@ -21,39 +21,66 @@
 #
 # See the usage() function for arguments and their definitions.
 
-# set global variables
-SCRIPT=$(basename $0)
-INSTALL_VER='0.78'   # self version
-INSTALL_DIR=$PWD     # name of deployment (install-from) dir
-INSTALL_FROM_IP=($(hostname -I))
-INSTALL_FROM_IP=${INSTALL_FROM_IP[$(( ${#INSTALL_FROM_IP[@]}-1 ))]} # last ntry
-REMOTE_INSTALL_DIR="/tmp/rhs-hadoop-install/" # on each node
-# companion install script name
-PREP_SH='prep_node.sh' # companion script run on each node
-REMOTE_PREP_SH="$REMOTE_INSTALL_DIR$PREP_SH" # full path
-NUMNODES=0           # number of nodes in hosts file (= trusted pool size)
-# local logfile on each host, copied from remote host to install-from host
-PREP_NODE_LOG='prep_node.log'
-PREP_NODE_LOG_PATH="${REMOTE_INSTALL_DIR}$PREP_NODE_LOG"
 
-# DO_BITS global task mask: bit set means to do the task associated with it
-DO_BITS=0xffff # default is to do all tasks
+# initialize_globals: set all globals vars to their initial/default value.
+initialize_globals(){
 
-# define bits in the DO_BITS global for the various perpare tasks
-# note: right-most bit is 0, value is the shift amount
-REPORT_BIT=0
-INSTALL_BIT=1
-CLEAN_BIT=2
-SETUP_BIT=3
-SETUP_XFS_BIT=4
-SETUP_VOL_BIT=5
-SETUP_USERS_BIT=6
-SETUP_DIRS_BIT=7
-PERF_BIT=8
+  SCRIPT=$(basename $0)
+  INSTALL_VER='0.79' # self version
 
-# source common constants and functions
-source $INSTALL_DIR/functions
+  # flag if we're doing an rhs related install, set before parsing args
+  [[ -d glusterfs ]] && RHS_INSTALL=false || RHS_INSTALL=true
 
+  INSTALL_DIR=$PWD # name of deployment (install-from) dir
+  INSTALL_FROM_IP=($(hostname -I))
+  INSTALL_FROM_IP=${INSTALL_FROM_IP[$(( ${#INSTALL_FROM_IP[@]}-1 ))]} #last ntry
+  REMOTE_INSTALL_DIR="/tmp/rhs-hadoop-install/" # on each node
+
+  # companion install script name
+  PREP_SH='prep_node.sh' # companion script run on each node
+  REMOTE_PREP_SH="$REMOTE_INSTALL_DIR$PREP_SH" # full path
+ 
+  # logfiles
+  [[ "$RHS_INSTALL" == true ]] && LOGFILE='/var/log/rhs-hadoop-install.log' ||
+	LOGFILE='/var/log/glusterfs-hadoop-install.log' 
+
+  # local logfile on each host, copied from remote host to install-from host
+  PREP_NODE_LOG='prep_node.log'
+  PREP_NODE_LOG_PATH="${REMOTE_INSTALL_DIR}$PREP_NODE_LOG"
+  
+  # DO_BITS global task mask: bit set means to do the task associated with it
+  DO_BITS=0xffff # default is to do all tasks
+  # define bits in the DO_BITS global for the various perpare tasks
+  # note: right-most bit is 0, value is the shift amount
+  REPORT_BIT=0
+  INSTALL_BIT=1
+  CLEAN_BIT=2
+  SETUP_BIT=3
+  SETUP_XFS_BIT=4
+  SETUP_VOL_BIT=5
+  SETUP_USERS_BIT=6
+  SETUP_DIRS_BIT=7
+  PERF_BIT=8
+
+  # brick/vol defaults
+  BRICK_DIR='/mnt/brick1'
+  VOLNAME='HadoopVol'
+  GLUSTER_MNT='/mnt/glusterfs'
+  REPLICA_CNT=2
+
+  # "hosts" file concontains hostname ip-addr for all nodes in cluster
+  HOSTS_FILE="$INSTALL_DIR/hosts"
+  # number of nodes in hosts file (= trusted pool size)
+  NUMNODES=0
+
+  # misc
+  MGMT_NODE=''
+  VERBOSE=$LOG_SUMMARY
+  ANS_YES='n' # for -y option
+
+  # source constants and functions common to other scripts
+  source $INSTALL_DIR/functions
+}
 
 # short_usage: write short usage to stdout.
 #
@@ -75,7 +102,7 @@ EOF
 }
 
 # usage: write full usage/help text to stdout.
-# Note: the --mkdirs, --users, --clean, --setup, --perf  options are not yet
+# Note: the --mkdirs, --users, --clean, --setup, et al  options are not yet
 #   documented.
 #
 function usage(){
@@ -138,21 +165,8 @@ EOF
 function parse_cmd(){
 
   local OPTIONS='vhqy'
-  local LONG_OPTS='brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,help,version,quiet,debug,clean,setup,mkdirs,users,perf'
+  local LONG_OPTS='brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,help,version,quiet,debug,clean,setup,xfs,vol,mkdirs,users,perf'
   local task_opt_seen=false
-
-  # defaults (global variables)
-  BRICK_DIR='/mnt/brick1'
-  VOLNAME='HadoopVol'
-  GLUSTER_MNT='/mnt/glusterfs'
-  REPLICA_CNT=2
-  # "hosts" file concontains hostname ip-addr for all nodes in cluster
-  HOSTS_FILE="$INSTALL_DIR/hosts"
-  MGMT_NODE=''
-  [[ "$RHS_INSTALL" == true ]] && LOGFILE='/var/log/rhs-hadoop-install.log' ||
-	LOGFILE='/var/log/glusterfs-hadoop-install.log' 
-  VERBOSE=$LOG_SUMMARY
-  ANS_YES='n'
 
   # note: $? *not* set for invalid option errors!
   local args=$(getopt -n "$SCRIPT" -o $OPTIONS --long $LONG_OPTS -- $@)
@@ -219,7 +233,22 @@ function parse_cmd(){
             task_opt_seen=true
 	    shift; continue
 	;;
+	--xfs)
+	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
+	    let "DO_BITS=((DO_BITS | (1<<SETUP_BIT)))"
+            let "DO_BITS=((DO_BITS | (1<<SETUP_XFS_BIT)))" # set xfs bit
+            task_opt_seen=true
+	    shift; continue
+	;;
+	--vol)
+	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
+	    let "DO_BITS=((DO_BITS | (1<<SETUP_BIT)))"
+            let "DO_BITS=((DO_BITS | (1<<SETUP_VOL_BIT)))" # set vol bit
+            task_opt_seen=true
+	    shift; continue
+	;;
 	--mkdirs)
+	    # note: vol must be mounted and created
 	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
 	    let "DO_BITS=((DO_BITS | (1<<SETUP_BIT)))"
             let "DO_BITS=((DO_BITS | (1<<SETUP_DIRS_BIT)))" # set dir bit
@@ -759,8 +788,9 @@ function verify_gluster_mnt(){
 # 2) stop vol **
 # 3) delete vol **
 # 4) detach nodes
-# 5) umount vol if mounted
-# 6) unmount brick_mnt if xfs mounted
+# 5) delete the volume subdir before unmounting brick
+# 6) umount vol if mounted
+# 7) unmount brick_mnt if xfs mounted
 # ** gluster cmd only done once for entire pool; all other cmds executed on
 #    each node
 #
@@ -823,13 +853,16 @@ function cleanup(){
       (( $? == 0 )) && break # detached on 1st try
   done
 
-  # 5) umount vol on every node, if mounted
-  # 6) unmount brick_mnt on every node, if xfs mounted
+  # 5) delete the volume subdir before unmounting brick
+  # 6) umount vol on every node, if mounted
+  # 7) unmount brick_mnt on every node, if xfs mounted
   display "  -- on all nodes:"            $LOG_INFO
+  display "       rmdir $BRICK_MNT..."    $LOG_INFO
   display "       umount $GLUSTER_MNT..." $LOG_INFO
   display "       umount $BRICK_DIR..."   $LOG_INFO
   for node in "${HOSTS[@]}"; do
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
+	  rmdir $BRICK_MNT # expected to be empty from #1)
           if grep -qs $GLUSTER_MNT /proc/mounts ; then
             umount $GLUSTER_MNT 2>&1
           fi
@@ -1085,7 +1118,8 @@ function setup(){
     # 5) mkdir mapredlocal scratch dir on every node (done after brick mount)
     display "  -- on all nodes:"                           $LOG_INFO
     display "       mkfs.xfs on brick-device"              $LOG_INFO
-    display "       mkdir $BRICK_DIR, $GLUSTER_MNT and $MAPRED_SCRATCH_DIR..." $LOG_INFO
+    display "       mkdir $BRICK_DIR, $GLUSTER_MNT and $MAPRED_SCRATCH_DIR..." \
+	$LOG_INFO
     display "       append mount entries to /etc/fstab..." $LOG_INFO
     display "       mount $BRICK_DIR..."                   $LOG_INFO
     xfs_brick_dirs_mnt
@@ -1374,9 +1408,7 @@ function reboot_self(){
 ## ** main ** ##
 ##            ##
 echo
-
-# flag if we're doing an rhs related install, set before parsing args
-[[ -d glusterfs ]] && RHS_INSTALL=false || RHS_INSTALL=true
+initialize_globals
 
 parse_cmd $@
 

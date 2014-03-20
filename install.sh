@@ -60,7 +60,8 @@ initialize_globals(){
   SETUP_VOL_BIT=5
   SETUP_USERS_BIT=6
   SETUP_DIRS_BIT=7
-  PERF_BIT=8
+  PERF_BIT=10
+  VALIDATE_BIT=11
 
   # brick/vol defaults
   BRICK_DIR='/mnt/brick1'
@@ -81,6 +82,31 @@ initialize_globals(){
   # source constants and functions common to other scripts
   source $INSTALL_DIR/functions
 }
+
+# yesno: prompts $1 to stdin and returns 0 if user answers yes, else returns 1.
+# The default (just hitting <enter>) is specified by $2.
+# $1=prompt (required),
+# $2=default (optional): 'y' or 'n' with 'n' being the default default.
+#
+function yesno(){
+
+  local prompt="$1"; local default="${2:-n}" # default is no
+  local yn
+
+   while true ; do
+       read -p "$prompt" yn
+       case $yn in
+	 [Yy])         return 0;;
+	 [Yy][Ee][Ss]) return 0;;
+	 [Nn])         return 1;;
+	 [Nn][Oo])     return 1;;
+	 *) # default
+	   [[ "$default" != 'y' ]] && return 1 || return 0
+         ;;
+       esac
+   done
+}
+
 
 # short_usage: write short usage to stdout.
 #
@@ -165,7 +191,7 @@ EOF
 function parse_cmd(){
 
   local OPTIONS='vhqy'
-  local LONG_OPTS='brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,help,version,quiet,debug,clean,setup,xfs,vol,mkdirs,users,perf'
+  local LONG_OPTS='brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,help,version,quiet,debug,clean,setup,xfs,vol,mkdirs,users,perf,validate'
   local task_opt_seen=false
 
   # note: $? *not* set for invalid option errors!
@@ -268,6 +294,13 @@ function parse_cmd(){
             task_opt_seen=true
 	    shift; continue
 	;;
+	--validate)
+	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
+	    let "DO_BITS=((DO_BITS | (1<<VALIDATE_BIT)))"
+	    let "DO_BITS=((DO_BITS | (1<<REPORT_BIT)))" # show report summary
+            task_opt_seen=true
+	    shift; continue
+	;;
 	--)  # no more args to parse
 	    shift; break
 	;;
@@ -298,7 +331,6 @@ function parse_cmd(){
 #
 function report_deploy_values(){
 
-  local ans='y'
   local OS_RELEASE='/etc/redhat-release'
   local RHS_RELEASE='/etc/redhat-storage-release'
   local OS; local RHS; local report_brick
@@ -384,13 +416,120 @@ function report_deploy_values(){
   display "  Log file:           $LOGFILE"          $LOG_REPORT
   display    "_______________________________________" $LOG_REPORT
 
-  [[ $VERBOSE < $LOG_QUIET && "$ANS_YES" == 'n' ]] && {
-	read -p "Continue? [y|N] " ans; }
-  case $ans in
-    y|yes|Y|YES|Yes) # ok, do nothing
-    ;;
-    *) exit 0
-  esac
+  if [[ $VERBOSE < $LOG_QUIET && "$ANS_YES" == 'n' ]] && \
+     ! yesno "Continue? [y|N] "; then
+    exit 0
+  fi
+}
+
+# validate_nodes: xxx
+#
+function validate_nodes(){
+
+  #local str; local str1; local len
+
+  echo
+  display "Validate of current environment for Hadoop tasks:" $LOG_REPORT
+  echo
+
+  #for node in "${HOSTS[@]}"; do
+      #str="**** Node: $node ****"
+      #len=${#str}
+      #str1="$(printf '_%.0s' $(seq $len))"
+      #display "$str1" $LOG_REPORT
+      #display "$str"  $LOG_REPORT
+
+      verify_mounts
+      echo
+      #verify_vol $node
+      #echo
+      #verify_users $node
+      #echo
+      #verify_dirs $node
+      #echo
+      #verify_ntp $node
+  done
+  echo
+exit
+}
+
+# verify_mounts: xx
+#
+function verify_mounts(){
+
+  local node
+  local err; local errcnt=0; local out; local mnt_opts
+
+  display "- Mount validation..." $LOG_REPORT
+  display "  * Brick $BRICK_DIR:" $LOG_SUMMARY
+  for node in "${HOSTS[@]}"; do
+  ssh -oStrictHostKeyChecking=no root@$node "ls $BRICK_DIR >& /dev/null"
+  if (( $? == 0 )) ; then # brick exists...
+    out="$(ssh -oStrictHostKeyChecking=no root@$node "
+	  grep $BRICK_DIR /proc/mounts")"
+    if (( $? == 0 )) ; then # brick mounted...
+      mnt_opts=$(cut -d ' ' -f 3-4 <<<$out)
+      display "    - mounted as: $mnt_opts" $LOG_INFO
+      if [[ ${mnt_opts%% *} != 'xfs' ]] ; then # mount type
+	display "$node: ISSUE: must be XFS" $LOG_FORCE
+	((errcnt++))
+      fi
+      if grep -qs -v noatime <<<$mnt_opts; then
+	display "$node: ISSUE: missing \"noatime\" mount option" $LOG_INFO
+	((errcnt++))
+      fi
+      if grep -qs -v inode64 <<<$mnt_opts; then
+	display "$node: ISSUE: missing \"inode64\" mount option" $LOG_INFO
+	((errcnt++))
+      fi
+      out="$(ssh -oStrictHostKeyChecking=no root@$node "
+	    xfs_info $BRICK_DIR")"
+      if (( $? == 0 )) ; then # brick is xfs...
+	out="$(cut -d' ' -f2 <<<$out | cut -d'=' -f2)" # isize value
+	if (( out == 512 )) ; then
+	  display "      xfs size=512 -- correct" $LOG_INFO
+	else
+	  display "$node: ISSUE: expect xfs size=512" $LOG_INFO
+	  ((errcnt++))
+	fi
+      fi
+    else
+      display "$node: ISSUE: Brick is not mounted" $LOG_INFO
+      ((errcnt++))
+    fi
+  else # brick not there...
+    display "$node: ISSUE: Brick not found" $LOG_FORCE
+    ((errcnt++))
+  fi
+  done
+
+  echo
+  display "  * Volume $GLUSTER_MNT:" $LOG_REPORT
+  for node in "${HOSTS[@]}"; do
+  ssh -oStrictHostKeyChecking=no root@$node "ls $GLUSTER_MNT >& /dev/null"
+  if (( $? == 0 )) ; then # vol mnt exists...
+    out="$(ssh -oStrictHostKeyChecking=no root@$node"
+	  grep $GLUSTER_MNT /proc/mounts")"
+    if (( $? == 0 )) ; then # vol mounted...
+      mnt_opts=$(cut -d ' ' -f 3-4 <<<$out)
+      display "    - mounted as: $mnt_opts" $LOG_REPORT
+      if [[ ${mnt_opts%% *} != 'fuse.glusterfs' ]] ; then # mount type
+	display "      ISSUE: must be fuse.glusterfs" $LOG_REPORT
+	((errcnt++))
+      fi
+      # Note: cannot see entry-timeout,attribute-timeout, etc in mount
+    else
+      display "      ISSUE: Volume is not mounted" $LOG_FORCE
+      ((errcnt++))
+    fi
+  else # vol mnt not there...
+    display "      ISSUE: Volume not found" $LOG_FORCE
+    ((errcnt++))
+  fi
+  done
+
+  (( errcnt == 0 )) && display "...No mount errors" $LOG_REPORT || \
+	display "...$errcnt MOUNT RELATED ERRORS" $LOG_FORCE
 }
 
 # kill_gluster: make sure glusterd and related processes are killed.
@@ -692,7 +831,7 @@ function verify_vol_started(){
   local VOL_NOT_STARTED="Volume $VOLNAME is not started"
   local STAGING_FAILED='Staging failed on'
 
-  while (( 1==1 )); do  # until an earlier transaction has completed...
+  while true ; do # until an earlier transaction has completed...
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
 	    gluster volume status $VOLNAME 2>&1")"
       if grep -qs "$VOL_NOT_STARTED" <<<$out; then
@@ -796,7 +935,7 @@ function verify_gluster_mnt(){
 #
 function cleanup(){
 
-  local node=''; local out; local err; local ans='y'
+  local node=''; local out; local err
   local force=''; local loglev # log fence value
 
   if [[ "$ANS_YES" == 'n' ]] ; then
@@ -804,14 +943,11 @@ function cleanup(){
     echo "The next step is to delete all files under $GLUSTER_MNT/ across the"
     echo "cluster, and to delete the gluster volume."
     echo "Answering yes will remove ALL files in the $VOLNAME volume!" 
-    read -p "Continue? [y|N] " ans
     echo
+    if ! yesno "Continue? [y|N] " ; then
+      exit 0
+    fi
   fi
-  case $ans in
-    y|yes|Y|YES|Yes) # ok, continue
-    ;;
-    *) exit 0
-  esac
 
   display "**Note: gluster \"cleanup\" errors below may be ignored if the $VOLNAME volume" $LOG_INFO
   display "  has not been created or started, etc." $LOG_INFO
@@ -1444,8 +1580,11 @@ let "DO_SETUP_VOL=(((DO_BITS>>SETUP_VOL_BIT) % 2))"
 let "DO_SETUP_USERS=(((DO_BITS>>SETUP_USERS_BIT) % 2))"
 let "DO_SETUP_DIRS=(((DO_BITS>>SETUP_DIRS_BIT) % 2))"
 let "DO_PERF=(((DO_BITS>>PERF_BIT) % 2))"
+let "DO_VALIDATE=(((DO_BITS>>VALIDATE_BIT) % 2))"
 
 (( DO_REPORT )) && report_deploy_values
+
+(( DO_VALIDATE )) && validate_nodes # prompts and may exit
 
 # per-node install and config...
 (( DO_INSTALL )) && install_nodes

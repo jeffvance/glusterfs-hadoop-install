@@ -50,6 +50,7 @@ initialize_globals(){
   
   # DO_BITS global task mask: bit set means to do the task associated with it
   DO_BITS=0xffff # default is to do all tasks
+  
   # define bits in the DO_BITS global for the various perpare tasks
   # note: right-most bit is 0, value is the shift amount
   REPORT_BIT=0
@@ -62,6 +63,9 @@ initialize_globals(){
   SETUP_DIRS_BIT=7
   PERF_BIT=10
   VALIDATE_BIT=11
+
+  # clear bits whose default is to not do the task
+  ((DO_BITS&=~(1<<VALIDATE_BIT)))
 
   # brick/vol defaults
   BRICK_DIR='/mnt/brick1'
@@ -244,60 +248,60 @@ function parse_cmd(){
 	;;
 	--clean)
 	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
-	    let "DO_BITS=((DO_BITS | (1<<CLEAN_BIT)))"
+	    ((DO_BITS|=(1<<CLEAN_BIT)))
             task_opt_seen=true
 	    shift; continue
 	;;
 	--setup)
 	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
-	    let "DO_BITS=((DO_BITS | (1<<SETUP_BIT)))"
+	    ((DO_BITS|=(1<<SETUP_BIT)))
             # set all of the setup sub-task bits
-            let "DO_BITS=((DO_BITS | (1<<SETUP_XFS_BIT)))"
-            let "DO_BITS=((DO_BITS | (1<<SETUP_VOL_BIT)))"
-            let "DO_BITS=((DO_BITS | (1<<SETUP_USERS_BIT)))"
-            let "DO_BITS=((DO_BITS | (1<<SETUP_DIRS_BIT)))" 
+            ((DO_BITS|=(1<<SETUP_XFS_BIT)))
+            ((DO_BITS|=(1<<SETUP_VOL_BIT)))
+            ((DO_BITS|=(1<<SETUP_USERS_BIT)))
+            ((DO_BITS|=(1<<SETUP_DIRS_BIT)))
             task_opt_seen=true
 	    shift; continue
 	;;
 	--xfs)
 	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
-	    let "DO_BITS=((DO_BITS | (1<<SETUP_BIT)))"
-            let "DO_BITS=((DO_BITS | (1<<SETUP_XFS_BIT)))" # set xfs bit
+	    ((DO_BITS|=(1<<SETUP_BIT)))
+            ((DO_BITS|=(1<<SETUP_XFS_BIT)))
             task_opt_seen=true
 	    shift; continue
 	;;
 	--vol)
 	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
-	    let "DO_BITS=((DO_BITS | (1<<SETUP_BIT)))"
-            let "DO_BITS=((DO_BITS | (1<<SETUP_VOL_BIT)))" # set vol bit
+	    ((DO_BITS|=(1<<SETUP_BIT)))
+            ((DO_BITS|=(1<<SETUP_VOL_BIT)))
             task_opt_seen=true
 	    shift; continue
 	;;
 	--mkdirs)
 	    # note: vol must be mounted and created
 	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
-	    let "DO_BITS=((DO_BITS | (1<<SETUP_BIT)))"
-            let "DO_BITS=((DO_BITS | (1<<SETUP_DIRS_BIT)))" # set dir bit
+	    ((DO_BITS|=(1<<SETUP_BIT)))
+            ((DO_BITS|=(1<<SETUP_DIRS_BIT)))
             task_opt_seen=true
 	    shift; continue
 	;;
 	--users)
 	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
-	    let "DO_BITS=((DO_BITS | (1<<SETUP_BIT)))"
-            let "DO_BITS=((DO_BITS | (1<<SETUP_USERS_BIT)))" # set users bit
+	    ((DO_BITS|=(1<<SETUP_BIT)))
+            ((DO_BITS|=(1<<SETUP_USERS_BIT)))
             task_opt_seen=true
 	    shift; continue
 	;;
 	--perf)
 	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
-	    let "DO_BITS=((DO_BITS | (1<<PERF_BIT)))"
+	    ((DO_BITS|=(1<<PERF_BIT)))
             task_opt_seen=true
 	    shift; continue
 	;;
 	--validate)
 	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
-	    let "DO_BITS=((DO_BITS | (1<<VALIDATE_BIT)))"
-	    let "DO_BITS=((DO_BITS | (1<<REPORT_BIT)))" # show report summary
+	    ((DO_BITS|=(1<<VALIDATE_BIT)))
+	    ((DO_BITS|=(1<<REPORT_BIT))) # show report summary too
             task_opt_seen=true
 	    shift; continue
 	;;
@@ -448,7 +452,7 @@ function validate_nodes(){
       #verify_dirs $node
       #echo
       #verify_ntp $node
-  done
+  #done
   echo
 exit
 }

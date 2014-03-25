@@ -14,15 +14,17 @@
 # required field is the hostname. Note hostnames are expected to be lower-case.
 #
 # The local "hosts" file can be used in a DNS environment (in which case an ip
-# address is not needed), or with /etc/hosts (in which case an ip address and
+# address is omitted), or with /etc/hosts (in which case an ip address and
 # hostname are supplied). If an ip address is used then the associated hostname
 # is required, and /etc/hosts will be updated with all of the ip and hosts
 # defined in this file. If DNS is being used (i.e. the absence of an ip address
 # field) then /etc/hosts is not touched.
 #
-# Brick devices (e.g., /dev/sdb) are supported, one per entry, but should only
+# Brick devices (e.g. /dev/sdb) are supported, one per entry, but should only
 # be needed in cases where different nodes in the cluster have different xfs
-# brick device paths.
+# brick device paths. The brick device is used only to create a PV in an LVM 
+# environment. Once a logical volume (LV) is created the brick-device is no
+# longer used and reference to the brick is via /dev/<VGName>/<LVName>.
 #
 # The order of the entries in the hosts file reflect how Gluster builds the 
 # volume. The examples below are for a 4 node cluster where files will be both

@@ -11,7 +11,7 @@
 
   The installation script is simple to execute:
   - ./install.sh --help  # to learn about the various options,
-  - ./install.sh [brick-device]
+  - ./install.sh [block-device]
   - examine the log file in /var/log/glusterfs-hadoop-install.log
 
   Each sub-directory may contain a script named "pre_install.sh" and/or a script
@@ -84,8 +84,8 @@ Instructions:
     $ cd <tarballName-version>
 
  3) execute the common "install.sh" from the install directory:
-    $ ./install.sh [options (see --help)] <brick-dev> (see hosts.example for
-                                                       more on brick-dev)
+    $ ./install.sh [options (see --help)] <block-dev> (see hosts.example for
+                                                       more on block-dev)
     For example: ./install.sh /dev/sdb
 
     Output is displayed on STDOUT and is also written to a logfile. The default

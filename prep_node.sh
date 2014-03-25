@@ -15,7 +15,7 @@
 #    otherwise, dns is assumed and /etc/hosts is not modified.
 #  - ensures that ntp is running correctly,
 #  - disables the firewall,
-#  - creates a PV, VG and LV based on the brick-dev and LV/VG-names,
+#  - creates a PV, VG and LV based on the block-dev and LV/VG-names,
 #  - installs the gluster-hadoop plugin, if present in any of the sub-
 #    directories from which install.sh is run.
 #
@@ -46,7 +46,7 @@
 # constants and args
 eval 'declare -A _ARGS='${1#*=} # delete the "declare -A name=" portion of arg
 NODE="${_ARGS[NODE]}"
-BRICK_DEV="${_ARGS[BRICK_DEV]}"
+BLOCK_DEV="${_ARGS[BLOCK_DEV]}"
 VG_NAME="${_ARGS[VG_NAME]}"
 LV_NAME="${_ARGS[LV_NAME]}"
 STORAGE_INSTALL="${_ARGS[INST_STORAGE]}" # true or false
@@ -309,8 +309,8 @@ function create_lv(){
 function install_storage(){
 
   display "-- LVM setup:" $LOG_INFO
-  create_pv $BRICK_DEV
-  create_vg $VG_NAME $BRICK_DEV
+  create_pv $BLOCK_DEV
+  create_vg $VG_NAME $BLOCK_DEV
   create_lv $LV_NAME $VG_NAME
 
   # install glusterfs-hadoop plugin, if provided in the package.

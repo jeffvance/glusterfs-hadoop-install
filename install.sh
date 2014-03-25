@@ -130,7 +130,7 @@ $SCRIPT [--vgname <name>]    [--lvname <name>]
            [--replica <num>]    [--hosts <path>]     [--mgmt-node <node>]
            [--logfile <path>]   [-y]
            [--verbose [num] ]   [-q|--quiet]         [--debug]
-           [brick-dev]
+           [block-dev]
 
 EOF
 }
@@ -151,21 +151,21 @@ Each node in the storage cluster must be defined in the local "hosts" file. The
 "hosts" file must be created prior to running this script. The "hosts" file
 format is described in the included hosts.example file.
   
-The brick-dev names the brick device where the XFS file system will be mounted, 
+The block-dev names the block device where the XFS file system will be mounted, 
 and is the name of the physical volume which is part of (or will be made part
 of) a volume group.  Examples include: /dev/<VGname>/<LVname>, /dev/sda,
-/dev/vdb. The brick-dev names a RAID6 storage partition. If the brick-dev is
-omitted then each line in the local "hosts" file must include a brick-dev-path.
+/dev/vdb. The block-dev names a RAID6 storage partition. If the block-dev is
+omitted then each line in the local "hosts" file must include a block-dev-path.
 EOF
   short_usage
   cat <<EOF
-  brick-dev          : Optional. Brick device path where the XFS file system is
+  block-dev          : Optional. Block device path where the XFS file system is
                        created, eg. /dev/sda or /dev/vdb. Names the physical 
                        volume which is part of an existing volume group, or will
-                       become part of a VG. brick-dev may be included in the
+                       become part of a VG. block-dev may be included in the
                        local hosts file, per node. If specified on the command 
-                       line then the same brick-dev applies to all nodes.
-  --vgname    <name> : Volume group name where the brick-dev will be added. Can
+                       line then the same block-dev applies to all nodes.
+  --vgname    <name> : Volume group name where the block-dev will be added. Can
                        be an existing VG or a new VG will be created. Default:
                        "RHS_vg1".
   --lvname    <name> : Logical Volume name. Can be an existing LV created from
@@ -181,7 +181,7 @@ EOF
   --mgmt-node <node> : hostname of the node to be used as the management node.
                        Default: the first node appearing in the "hosts" file.
   --logfile   <path> : logfile name. Default is /var/log/rhs-hadoo-install.log.
-                       brick-dev. Default: no logical volume is created.
+                       block-dev. Default: no logical volume is created.
   -y                 : suppress prompts and auto-answer "yes". Default is to
                        prompt the user.
   --verbose   [=num] : set the verbosity level to a value of 0, 1, 2, 3. If
@@ -334,9 +334,9 @@ function parse_cmd(){
   (( $# > 1 )) && {
         echo "Too many parameters: $@"; short_usage; exit -1; }
 
-  # the brick dev is the only non-option parameter and is required unless 
+  # the block dev is the only non-option parameter and is required unless 
   # provided in the local hosts file
-  (( $# == 1 )) && BRICK_DEV="$1"
+  (( $# == 1 )) && BLOCK_DEV="$1"
 
   # validate replica cnt for RHS
   (( REPLICA_CNT != 2 )) && {
@@ -407,9 +407,9 @@ function report_deploy_values(){
 	fi")"
   fi
 
-  # report brick-dev
-  if [[ -n "$BRICK_DEV" ]] ; then # passed as cmdline arg
-    report_brick="$BRICK_DEV"
+  # report block-dev
+  if [[ -n "$BLOCK_DEV" ]] ; then # passed as cmdline arg
+    report_brick="$BLOCK_DEV"
   else
     report_brick="${BRICKS[@]}"
   fi
@@ -1028,7 +1028,7 @@ function cleanup(){
   display "       delete LV, VG, PV..."   $LOG_INFO
   for (( i=0; i<$NUMNODES; i++ )); do
       node=${HOSTS[$i]}
-      [[ -n "$BRICK_DEV" ]] && brick="$BRICK_DEV" || brick="${BRICKS[$i]}"
+      [[ -n "$BLOCK_DEV" ]] && brick="$BLOCK_DEV" || brick="${BRICKS[$i]}"
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
           cd $REMOTE_INSTALL_DIR
           source functions # needed below...
@@ -1295,7 +1295,7 @@ function setup(){
     # 4) mount brick on every node
     # 5) mkdir mapredlocal scratch dir on every node (done after brick mount)
     display "  -- on all nodes:"                           $LOG_INFO
-    display "       mkfs.xfs on brick-device"              $LOG_INFO
+    display "       mkfs.xfs on block-device"              $LOG_INFO
     display "       mkdir $BRICK_DIR, $GLUSTER_MNT and $MAPRED_SCRATCH_DIR..." \
 	$LOG_INFO
     display "       append mount entries to /etc/fstab..." $LOG_INFO
@@ -1408,7 +1408,7 @@ function install_nodes(){
   # code is returned then this function exits.
   # Args: $1=hostname, $2=node's ip (can be hostname if ip is unknown),
   #       $3=flag to install storage node, $4=flag to install the mgmt node.
-  #       $5=brick-dev (or null)
+  #       $5=block-dev (or null)
   #
   function prep_node(){
 
@@ -1443,7 +1443,7 @@ function install_nodes(){
     # note: arrays must be escape-quoted.
     # note: prep_node.sh may apply patches which require $node to be rebooted
     declare -A PREP_ARGS=([NODE]="$node" \
-	[BRICK_DEV]="$brick" [LV_BRICK]="$LV_BRICK" [BRICK_DIR]="$BRICK_DIR" \
+	[BLOCK_DEV]="$brick" [LV_BRICK]="$LV_BRICK" [BRICK_DIR]="$BRICK_DIR" \
 	[VG_NAME]="$VG_NAME" [LV_NAME]="$LV_NAME" \
 	[INST_STORAGE]="$install_storage" [INST_MGMT]="$install_mgmt" \
 	[MGMT_NODE]="$MGMT_NODE" [VERBOSE]="$VERBOSE" \
@@ -1480,7 +1480,7 @@ function install_nodes(){
   #      #
   for (( i=0; i<$NUMNODES; i++ )); do
       node=${HOSTS[$i]}; ip=${HOST_IPS[$i]}
-      [[ -n "$BRICK_DEV" ]] && brick="$BRICK_DEV" || brick="${BRICKS[$i]}"
+      [[ -n "$BLOCK_DEV" ]] && brick="$BLOCK_DEV" || brick="${BRICKS[$i]}"
       echo
       display
       display '--------------------------------------------' $LOG_SUMMARY
@@ -1598,14 +1598,14 @@ echo
 display "-- Verifying deployment environment, including the \"hosts\" file format:" $LOG_INFO
 verify_local_deploy_setup
 
-# since a brick-dev is optional in the local hosts file, verify that we either
-# have a brick-dev cmdline arg, or we have bricks in the hosts file, but not
+# since a block-dev is optional in the local hosts file, verify that we either
+# have a block-dev cmdline arg, or we have bricks in the hosts file, but not
 # both
-if [[ -z "$BRICK_DEV" && ${#BRICKS} == 0 ]] ; then
-  display "ERROR: a brick device path is required either as an arg to $SCRIPT or in\nthe local $HOSTS_FILE hosts file" $LOG_FORCE
+if [[ -z "$BLOCK_DEV" && ${#BRICKS} == 0 ]] ; then
+  display "ERROR: a block device path is required either as an arg to $SCRIPT or in\nthe local $HOSTS_FILE hosts file" $LOG_FORCE
   exit -1
-elif [[ -n "$BRICK_DEV" && ${#BRICKS}>0 ]] ; then
-  display "ERROR: a brick device path can be provided either as an arg to $SCRIPT or\nin the local $HOSTS_FILE hosts file, but not in both" $LOG_FORCE
+elif [[ -n "$BLOCK_DEV" && ${#BRICKS}>0 ]] ; then
+  display "ERROR: a block device path can be provided either as an arg to $SCRIPT or\nin the local $HOSTS_FILE hosts file, but not in both" $LOG_FORCE
   exit -1
 fi
 

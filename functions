@@ -289,3 +289,35 @@ function verify_local_deploy_setup(){
   display "   ...verified" $LOG_DEBUG
 }
 
+# pv_present: return 0(shell true) if the passed in PV exists.
+#
+function pv_present(){
+
+  local pv="$1"
+
+  if pvs $pv >& /dev/null ; then return 0
+  else return 1
+  fi
+}
+
+# vg_present: return 0(shell true) if the passed in VG exists.
+#
+function vg_present(){
+
+  local vg="$1"
+
+  if vgs $vg >& /dev/null ; then return 0
+  else return 1
+  fi
+}
+
+# lv_present: return 0(shell true) if the passed in LV/VG exists.
+#
+function lv_present(){
+
+  local vg="$1"; local lv="$2"
+
+  if lvs $vg | grep -w -qs $lv ; then return 0
+  else return 1
+  fi
+}

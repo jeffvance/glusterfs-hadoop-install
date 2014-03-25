@@ -26,7 +26,7 @@
 initialize_globals(){
 
   SCRIPT=$(basename $0)
-  INSTALL_VER='0.79' # self version
+  INSTALL_VER='0.80' # self version
 
   # flag if we're doing an rhs related install, set before parsing args
   [[ -d glusterfs ]] && RHS_INSTALL=false || RHS_INSTALL=true
@@ -947,7 +947,7 @@ function verify_gluster_mnt(){
 }
 
 # cleanup: do the following steps (order matters), but always prompt for
-# confirmation # before removing files under the gluster mount.
+# confirmation before removing files under the gluster mount.
 # Note: this function used to be part of the default task flow for preparing
 #   RHS for Hadoop workload; however, now (2014-Mar) it is *only* available
 #   via the undocumented --clean option.
@@ -957,13 +957,13 @@ function verify_gluster_mnt(){
 # 4) detach nodes
 # 5) umount vol if mounted
 # 6) unmount brick_mnt if xfs mounted
+# 7) delete the LV, VG and PV.
 # ** gluster cmd only done once for entire pool; all other cmds executed on
 #    each node
 #
 function cleanup(){
 
-  local node=''; local out; local err
-  local force=''; local loglev # log fence value
+  local node; local i; local out; local err; local force=''; local brick
 
   # unconditionally prompt before deleting files and the volume!
   echo
@@ -1021,18 +1021,33 @@ function cleanup(){
 
   # 5) umount vol on every node, if mounted
   # 6) unmount brick_mnt on every node, if xfs mounted
+  # 7) delete the LV, VG and PV on every node
   display "  -- on all nodes:"            $LOG_INFO
   display "       umount $GLUSTER_MNT..." $LOG_INFO
   display "       umount $BRICK_DIR..."   $LOG_INFO
-  for node in "${HOSTS[@]}"; do
+  display "       delete LV, VG, PV..."   $LOG_INFO
+  for (( i=0; i<$NUMNODES; i++ )); do
+      node=${HOSTS[$i]}
+      [[ -n "$BRICK_DEV" ]] && brick="$BRICK_DEV" || brick="${BRICKS[$i]}"
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
+          cd $REMOTE_INSTALL_DIR
+          source functions # needed below...
           if grep -qs $GLUSTER_MNT /proc/mounts ; then
             umount $GLUSTER_MNT 2>&1
           fi
           if grep -qs $BRICK_DIR /proc/mounts ; then
             umount $BRICK_DIR 2>&1
-          fi")"
-      display "umounts node $node: $out" $LOG_DEBUG
+          fi
+	  if lv_present $VG_NAME $LV_NAME ; then
+	    lvremove -f $LV_BRICK 2>&1
+	  fi
+	  if vg_present $VG_NAME ; then
+	    vgremove -f $VG_NAME 2>&1
+	  fi
+	  if pv_present $brick ; then
+	    pvremove -y $brick 2>&1
+	  fi")"
+      display "umounts & LVM cmds on node $node: $out" $LOG_DEBUG
       verify_umounts $node
   done
 }
@@ -1065,12 +1080,11 @@ function create_trusted_pool(){
 #
 function xfs_brick_dirs_mnt(){
 
-  local out; local i; local node
+  local out; local node
   local BRICK_MNT_OPTS="noatime,inode64"
   local GLUSTER_MNT_OPTS="entry-timeout=0,attribute-timeout=0,use-readdirp=no,acl,_netdev"
 
-  for (( i=0 ; i<$NUMNODES ; i++ )) ; do
-      node=${HOSTS[$i]}
+  for node in "${HOSTS[@]}" ; do
       display "On $node:" $LOG_DEBUG
       # mkfs.xfs
       out="$(ssh -oStrictHostKeyChecking=no root@$node "

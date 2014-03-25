@@ -242,9 +242,7 @@ function create_pv(){
   local pv="$1"
   local err; local out; local DATA_ALIGN='2560k'
 
-  pvdisplay $pv >& /dev/nul
-  err=$?
-  if (( err == 0 )) ; then
+  if pv_present $pv ; then
     display "INFO: private volume \"$pv\" already exists" $LOG_DEBUG
     return
   fi
@@ -267,9 +265,7 @@ function create_vg(){
   local vg="$1"; local dev="$2"
   local err; local out
 
-  vgdisplay $vg >& /dev/null
-  err=$?
-  if (( err == 0 )) ; then
+  if vg_present $vg ; then
     display "INFO: volume group \"$vg\" already exists" $LOG_DEBUG
     return
   fi
@@ -292,10 +288,7 @@ function create_lv(){
   local lv="$1"; local vg="$2"
   local err; local out; local EXT_FREE='100%FREE'
 
-  #lvdisplay $lv >& /dev/null
-  lvs $vg | grep -w -qs $lv
-  err=$?
-  if (( err == 0 )) ; then
+  if lv_present $vg $lv ; then
     display "INFO: logical volume \"$lv\" already exists" $LOG_DEBUG
     return
   fi

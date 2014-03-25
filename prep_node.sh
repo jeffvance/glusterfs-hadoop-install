@@ -15,6 +15,7 @@
 #    otherwise, dns is assumed and /etc/hosts is not modified.
 #  - ensures that ntp is running correctly,
 #  - disables the firewall,
+#  - creates a PV, VG and LV based on the brick-dev and LV/VG-names,
 #  - installs the gluster-hadoop plugin, if present in any of the sub-
 #    directories from which install.sh is run.
 #
@@ -45,6 +46,9 @@
 # constants and args
 eval 'declare -A _ARGS='${1#*=} # delete the "declare -A name=" portion of arg
 NODE="${_ARGS[NODE]}"
+BRICK_DEV="${_ARGS[BRICK_DEV]}"
+VG_NAME="${_ARGS[VG_NAME]}"
+LV_NAME="${_ARGS[LV_NAME]}"
 STORAGE_INSTALL="${_ARGS[INST_STORAGE]}" # true or false
 MGMT_INSTALL="${_ARGS[INST_MGMT]}"       # true or false
 VERBOSE="${_ARGS[VERBOSE]}"  # needed by display()
@@ -230,14 +234,93 @@ function install_common(){
   verify_ntp
 }
 
+# create_pv: initialize a physical volume for use by LVM based on the passed-in
+# device path. Arg: 1=physical volume
+#
+function create_pv(){
+
+  local pv="$1"
+  local err; local out; local DATA_ALIGN='2560k'
+
+  pvdisplay $pv >& /dev/nul
+  err=$?
+  if (( err == 0 )) ; then
+    display "INFO: private volume \"$pv\" already exists" $LOG_DEBUG
+    return
+  fi
+
+  display "   pvcreate of $pv:" $LOG_INFO
+  out="$(pvcreate --dataalignment $DATA_ALIGN -y $pv 2>&1)"
+  err=$?
+  display "   pvcreate out: $out" $LOG_DEBUG
+  if (( err != 0 )) ; then
+    display "ERROR $err: pvcreate on $pv failed" $LOG_FORCE
+    exit 13
+  fi
+}
+
+# create_vg: create a volume group based on the args passed.
+# Args: 1=vgname, 2=physical device path (single dev for now)
+#
+function create_vg(){
+
+  local vg="$1"; local dev="$2"
+  local err; local out
+
+  vgdisplay $vg >& /dev/null
+  err=$?
+  if (( err == 0 )) ; then
+    display "INFO: volume group \"$vg\" already exists" $LOG_DEBUG
+    return
+  fi
+
+  display "   vgcreate of $vg containing $dev:" $LOG_INFO
+  out="$(vgcreate $vg "$dev" 2>&1)"
+  err=$?
+  display "   vgcreate out: $out" $LOG_DEBUG
+  if (( err != 0 )) ; then
+    display "ERROR $err: vgcreate of $vg failed" $LOG_FORCE
+    exit 15
+  fi
+}
+
+# create_lv: create a logical volume in the passed-in volume group.
+# Args: 1=logical volume name, 2=volume group name
+#
+function create_lv(){
+
+  local lv="$1"; local vg="$2"
+  local err; local out; local EXT_FREE='100%FREE'
+
+  #lvdisplay $lv >& /dev/null
+  lvs $vg | grep -w -qs $lv
+  err=$?
+  if (( err == 0 )) ; then
+    display "INFO: logical volume \"$lv\" already exists" $LOG_DEBUG
+    return
+  fi
+
+  display "   lvcreate of $lv from $vg:" $LOG_INFO
+  out="$(lvcreate --extents $EXT_FREE --name $lv "$vg" 2>&1)"
+  err=$?
+  display "   lvcreate out: $out" $LOG_DEBUG
+  if (( err != 0 )) ; then
+    display "ERROR $err: lvcreate of $lv from $vg failed" $LOG_FORCE
+    exit 17
+  fi
+}
+
 # install_storage: perform the installation steps needed when the node is a
 # storage/data node.
 #
 function install_storage(){
 
-  local out
+  display "-- LVM setup:" $LOG_INFO
+  create_pv $BRICK_DEV
+  create_vg $VG_NAME $BRICK_DEV
+  create_lv $LV_NAME $VG_NAME
 
-  # install glusterfs-hadoop plugin on agent nodes
+  # install glusterfs-hadoop plugin, if provided in the package.
   install_plugin
 }
 

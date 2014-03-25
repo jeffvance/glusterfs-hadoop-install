@@ -61,13 +61,16 @@ initialize_globals(){
   SETUP_VOL_BIT=5
   SETUP_USERS_BIT=6
   SETUP_DIRS_BIT=7
-  PERF_BIT=10
-  VALIDATE_BIT=11
+  PERF_BIT=8
+  VALIDATE_BIT=9
 
   # clear bits whose default is to not do the task
+  ((DO_BITS&=~(1<<CLEAN_BIT))) # cleanup is no longer done by default
   ((DO_BITS&=~(1<<VALIDATE_BIT)))
 
   # brick/vol defaults
+  VG_NAME='RHS_vg1' # default, option can override
+  LV_NAME='RHS_lv1' # default, option can override
   BRICK_DIR='/mnt/brick1'
   VOLNAME='HadoopVol'
   GLUSTER_MNT='/mnt/glusterfs'
@@ -122,7 +125,8 @@ Syntax:
 
 $SCRIPT [-v|--version] | [-h|--help]
 
-$SCRIPT [--brick-mnt <path>] [--vol-name <name>]  [--vol-mnt <path>]
+$SCRIPT [--vgname <name>]    [--lvname <name>]
+           [--brick-mnt <path>] [--vol-name <name>]  [--vol-mnt <path>]
            [--replica <num>]    [--hosts <path>]     [--mgmt-node <node>]
            [--logfile <path>]   [-y]
            [--verbose [num] ]   [-q|--quiet]         [--debug]
@@ -142,22 +146,30 @@ function usage(){
 Usage:
 
 Prepares a glusterfs volume for Hadoop workloads. Note that hadoop itself is not
-installed by these scripts. The user is expected to install hadoop separately.
+installed by this script. The user is expected to install hadoop separately.
 Each node in the storage cluster must be defined in the local "hosts" file. The
 "hosts" file must be created prior to running this script. The "hosts" file
 format is described in the included hosts.example file.
   
-The brick-dev argument names the brick device where the XFS file system will be
-mounted. Examples include: /dev/<VGname>/<LVname> or /dev/vdb1, etc. The brick-
-dev names a RAID6 storage partition. If the brick-dev is omitted then each line
-in the local "hosts" file must include a brick-dev-path.
+The brick-dev names the brick device where the XFS file system will be mounted, 
+and is the name of the physical volume which is part of (or will be made part
+of) a volume group.  Examples include: /dev/<VGname>/<LVname>, /dev/sda,
+/dev/vdb. The brick-dev names a RAID6 storage partition. If the brick-dev is
+omitted then each line in the local "hosts" file must include a brick-dev-path.
 EOF
   short_usage
   cat <<EOF
-  brick-dev          : Brick device path where the XFS file system is created,
-                       eg. /dev/vgName/lvName. Optional. May be included in the
-                       local hosts file, per node. If specified on the command
+  brick-dev          : Optional. Brick device path where the XFS file system is
+                       created, eg. /dev/sda or /dev/vdb. Names the physical 
+                       volume which is part of an existing volume group, or will
+                       become part of a VG. brick-dev may be included in the
+                       local hosts file, per node. If specified on the command 
                        line then the same brick-dev applies to all nodes.
+  --vgname    <name> : Volume group name where the brick-dev will be added. Can
+                       be an existing VG or a new VG will be created. Default:
+                       "RHS_vg1".
+  --lvname    <name> : Logical Volume name. Can be an existing LV created from
+                       the VG, or a new LV will be created. Default: "RHS_lv1".
   --brick_mnt <path> : Brick directory. Default: "/mnt/brick1/<volname>".
   --vol-name  <name> : Gluster volume name. Default: "HadoopVol".
   --vol-mnt   <path> : Gluster mount point. Default: "/mnt/glusterfs".
@@ -169,6 +181,7 @@ EOF
   --mgmt-node <node> : hostname of the node to be used as the management node.
                        Default: the first node appearing in the "hosts" file.
   --logfile   <path> : logfile name. Default is /var/log/rhs-hadoo-install.log.
+                       brick-dev. Default: no logical volume is created.
   -y                 : suppress prompts and auto-answer "yes". Default is to
                        prompt the user.
   --verbose   [=num] : set the verbosity level to a value of 0, 1, 2, 3. If
@@ -195,7 +208,7 @@ EOF
 function parse_cmd(){
 
   local OPTIONS='vhqy'
-  local LONG_OPTS='brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,help,version,quiet,debug,clean,setup,xfs,vol,mkdirs,users,perf,validate'
+  local LONG_OPTS='vgname:,lvname:,brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,help,version,quiet,debug,clean,setup,xfs,vol,mkdirs,users,perf,validate'
   local task_opt_seen=false
 
   # note: $? *not* set for invalid option errors!
@@ -210,6 +223,12 @@ function parse_cmd(){
 	;;
 	-v|--version)
 	    echo "$SCRIPT version: $INSTALL_VER"; exit 0
+	;;
+	--vgname)
+	    VG_NAME=$2; shift 2; continue
+	;;
+	--lvname)
+	    LV_NAME=$2; shift 2; continue
 	;;
 	--brick-mnt)
 	    BRICK_DIR=$2; shift 2; continue
@@ -416,6 +435,8 @@ function report_deploy_values(){
   display "  XFS device path(s)  $report_brick"     $LOG_REPORT
   display "  XFS brick dir:      $BRICK_DIR"        $LOG_REPORT
   display "  XFS brick mount:    $BRICK_MNT"        $LOG_REPORT
+  display "  Vol Group name:     $VG_NAME"          $LOG_REPORT
+  display "  Logical Vol name:   $LV_NAME"          $LOG_REPORT
   display "  Verbose:            $VERBOSE"          $LOG_REPORT
   display "  Log file:           $LOGFILE"          $LOG_REPORT
   display    "_______________________________________" $LOG_REPORT
@@ -426,7 +447,7 @@ function report_deploy_values(){
   fi
 }
 
-# validate_nodes: xxx
+# validate_nodes: NOT DONE. DO NOT USE!
 #
 function validate_nodes(){
 
@@ -457,7 +478,7 @@ function validate_nodes(){
 exit
 }
 
-# verify_mounts: xx
+# verify_mounts: NOT DONE. DO NOT USE!
 #
 function verify_mounts(){
 
@@ -925,15 +946,17 @@ function verify_gluster_mnt(){
   fi
 }
 
-# cleanup: do the following steps (order matters), but prompt for confirmation
-# before removing files under the gluster mount.
+# cleanup: do the following steps (order matters), but always prompt for
+# confirmation # before removing files under the gluster mount.
+# Note: this function used to be part of the default task flow for preparing
+#   RHS for Hadoop workload; however, now (2014-Mar) it is *only* available
+#   via the undocumented --clean option.
 # 1) delete all files/dirs under volume mount **
 # 2) stop vol **
 # 3) delete vol **
 # 4) detach nodes
-# 5) delete the volume subdir before unmounting brick
-# 6) umount vol if mounted
-# 7) unmount brick_mnt if xfs mounted
+# 5) umount vol if mounted
+# 6) unmount brick_mnt if xfs mounted
 # ** gluster cmd only done once for entire pool; all other cmds executed on
 #    each node
 #
@@ -942,15 +965,18 @@ function cleanup(){
   local node=''; local out; local err
   local force=''; local loglev # log fence value
 
-  if [[ "$ANS_YES" == 'n' ]] ; then
-    echo
-    echo "The next step is to delete all files under $GLUSTER_MNT/ across the"
-    echo "cluster, and to delete the gluster volume."
-    echo "Answering yes will remove ALL files in the $VOLNAME volume!" 
-    echo
-    if ! yesno "Continue? [y|N] " ; then
-      exit 0
-    fi
+  # unconditionally prompt before deleting files and the volume!
+  echo
+  echo "The next step is to delete all files under $GLUSTER_MNT/ across the"
+  echo "cluster, and to delete the gluster volume."
+  echo "Answering yes will remove ALL files in the $VOLNAME volume!" 
+  echo
+  if ! yesno "Continue? [y|N] " ; then
+    exit 0
+  fi
+  if ! yesno "Are you 100% certain? This is not reversible! Continue? [y|N] "
+  then
+    exit 0
   fi
 
   display "**Note: gluster \"cleanup\" errors below may be ignored if the $VOLNAME volume" $LOG_INFO
@@ -993,16 +1019,13 @@ function cleanup(){
       (( $? == 0 )) && break # detached on 1st try
   done
 
-  # 5) delete the volume subdir before unmounting brick
-  # 6) umount vol on every node, if mounted
-  # 7) unmount brick_mnt on every node, if xfs mounted
+  # 5) umount vol on every node, if mounted
+  # 6) unmount brick_mnt on every node, if xfs mounted
   display "  -- on all nodes:"            $LOG_INFO
-  display "       rmdir $BRICK_MNT..."    $LOG_INFO
   display "       umount $GLUSTER_MNT..." $LOG_INFO
   display "       umount $BRICK_DIR..."   $LOG_INFO
   for node in "${HOSTS[@]}"; do
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
-	  rmdir $BRICK_MNT # expected to be empty from #1)
           if grep -qs $GLUSTER_MNT /proc/mounts ; then
             umount $GLUSTER_MNT 2>&1
           fi
@@ -1042,22 +1065,21 @@ function create_trusted_pool(){
 #
 function xfs_brick_dirs_mnt(){
 
-  local out; local i; local node; local brick
+  local out; local i; local node
   local BRICK_MNT_OPTS="noatime,inode64"
   local GLUSTER_MNT_OPTS="entry-timeout=0,attribute-timeout=0,use-readdirp=no,acl,_netdev"
 
   for (( i=0 ; i<$NUMNODES ; i++ )) ; do
       node=${HOSTS[$i]}
       display "On $node:" $LOG_DEBUG
-      [[ -n "$BRICK_DEV" ]] && brick="$BRICK_DEV" || brick="${BRICKS[$i]}"
       # mkfs.xfs
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
-	    mkfs -t xfs -i size=512 -f "$brick" 2>&1")"
+	    mkfs -t xfs -i size=512 -f "$LV_BRICK" 2>&1")"
       if (( $? != 0 )) ; then
-	display "ERROR: $node: mkfs.xfs on brick $brick: $out" $LOG_FORCE
+	display "ERROR: $node: mkfs.xfs on brick $LV_BRICK: $out" $LOG_FORCE
 	exit 33
       fi
-      display " * mkfs.xfs on $brick: $out" $LOG_DEBUG
+      display " * mkfs.xfs on $LV_BRICK: $out" $LOG_DEBUG
 
       # make brick and vol mnt dirs
       # note: must be done before the brick mount
@@ -1078,7 +1100,8 @@ function xfs_brick_dirs_mnt(){
       # append brick and gluster mounts to fstab
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
 	     if ! grep -qs $BRICK_DIR /etc/fstab ; then
-	       echo '$brick $BRICK_DIR xfs  $BRICK_MNT_OPTS  0 0' >>/etc/fstab
+	       echo '$LV_BRICK $BRICK_DIR xfs  \
+		$BRICK_MNT_OPTS  0 0' >>/etc/fstab
 	     fi
 	     if ! grep -qs $GLUSTER_MNT /etc/fstab ; then
 	       echo '$node:/$VOLNAME  $GLUSTER_MNT  glusterfs \
@@ -1093,9 +1116,10 @@ function xfs_brick_dirs_mnt(){
       # permissions and owner must be set *after* the gluster dir is mounted
       # for the same reason.
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
-	    mount $brick 2>&1")" # mount via fstab
+	    mount $BRICK_DIR 2>&1")" # mount via fstab
       (( $? != 0 )) && {
-	display "ERROR on $node: mount $brick as $BRICK_DIR: $out" $LOG_FORCE;
+	display "ERROR on $node: mount $LV_BRICK as $BRICK_DIR: $out" \
+		$LOG_FORCE;
 	exit 45; }
       display " * brick mount: $out" $LOG_DEBUG
 
@@ -1404,7 +1428,9 @@ function install_nodes(){
     #   an associative array cannot be arrays or other structures.
     # note: arrays must be escape-quoted.
     # note: prep_node.sh may apply patches which require $node to be rebooted
-    declare -A PREP_ARGS=([BRICK_DEV]="$brick" [NODE]="$node" \
+    declare -A PREP_ARGS=([NODE]="$node" \
+	[BRICK_DEV]="$brick" [LV_BRICK]="$LV_BRICK" [BRICK_DIR]="$BRICK_DIR" \
+	[VG_NAME]="$VG_NAME" [LV_NAME]="$LV_NAME" \
 	[INST_STORAGE]="$install_storage" [INST_MGMT]="$install_mgmt" \
 	[MGMT_NODE]="$MGMT_NODE" [VERBOSE]="$VERBOSE" \
 	[PREP_LOG]="$PREP_NODE_LOG_PATH" [REMOTE_DIR]="$REMOTE_INSTALL_DIR" \
@@ -1569,22 +1595,25 @@ elif [[ -n "$BRICK_DEV" && ${#BRICKS}>0 ]] ; then
   exit -1
 fi
 
+# lv brick is independent of physical bricks used to create the PV
+LV_BRICK="/dev/$VG_NAME/$LV_NAME"
+
 # convention is to use the volname as the subdir under the brick as the mnt
 BRICK_MNT=$BRICK_DIR/$VOLNAME
 MAPRED_SCRATCH_DIR="$BRICK_DIR/mapredlocal" # xfs but not distributed
 firstNode=${HOSTS[0]}
 
 # set DO_xxx globals based on DO_BITS
-let "DO_REPORT=(((DO_BITS>>REPORT_BIT) % 2))" # 1 --> do it
-let "DO_INSTALL=(((DO_BITS>>INSTALL_BIT) % 2))"
-let "DO_CLEAN=(((DO_BITS>>CLEAN_BIT) % 2))"
-let "DO_SETUP=(((DO_BITS>>SETUP_BIT) % 2))" # 0 --> defeats all setup tasks
-let "DO_SETUP_XFS=(((DO_BITS>>SETUP_XFS_BIT) % 2))"
-let "DO_SETUP_VOL=(((DO_BITS>>SETUP_VOL_BIT) % 2))"
-let "DO_SETUP_USERS=(((DO_BITS>>SETUP_USERS_BIT) % 2))"
-let "DO_SETUP_DIRS=(((DO_BITS>>SETUP_DIRS_BIT) % 2))"
-let "DO_PERF=(((DO_BITS>>PERF_BIT) % 2))"
-let "DO_VALIDATE=(((DO_BITS>>VALIDATE_BIT) % 2))"
+((DO_REPORT=(DO_BITS>>REPORT_BIT) % 2)) # 1 --> do it
+((DO_INSTALL=(DO_BITS>>INSTALL_BIT) % 2))
+((DO_CLEAN=(DO_BITS>>CLEAN_BIT) % 2))
+((DO_SETUP=(DO_BITS>>SETUP_BIT) % 2)) # 0 --> defeats all setup tasks
+((DO_SETUP_XFS=(DO_BITS>>SETUP_XFS_BIT) % 2))
+((DO_SETUP_VOL=(DO_BITS>>SETUP_VOL_BIT) % 2))
+((DO_SETUP_USERS=(DO_BITS>>SETUP_USERS_BIT) % 2))
+((DO_SETUP_DIRS=(DO_BITS>>SETUP_DIRS_BIT) % 2))
+((DO_PERF=(DO_BITS>>PERF_BIT) % 2))
+((DO_VALIDATE=(DO_BITS>>VALIDATE_BIT) % 2))
 
 (( DO_REPORT )) && report_deploy_values
 

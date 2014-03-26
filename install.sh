@@ -54,13 +54,13 @@ initialize_globals(){
   # define bits in the DO_BITS global for the various perpare tasks
   # note: right-most bit is 0, value is the shift amount
   REPORT_BIT=0
-  INSTALL_BIT=1
+  PREP_BIT=1
   CLEAN_BIT=2
   SETUP_BIT=3
-  SETUP_XFS_BIT=4
+  SETUP_BRICKS_BIT=4
   SETUP_VOL_BIT=5
   SETUP_USERS_BIT=6
-  SETUP_DIRS_BIT=7
+  SETUP_HDIRS_BIT=7
   PERF_BIT=8
   VALIDATE_BIT=9
 
@@ -136,7 +136,7 @@ EOF
 }
 
 # usage: write full usage/help text to stdout.
-# Note: the --mkdirs, --users, --clean, --setup, et al  options are not yet
+# Note: the --_prep, --_users, --_clean, --_setup, et al options are not yet
 #   documented.
 #
 function usage(){
@@ -208,7 +208,7 @@ EOF
 function parse_cmd(){
 
   local OPTIONS='vhqy'
-  local LONG_OPTS='vgname:,lvname:,brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,help,version,quiet,debug,clean,setup,xfs,vol,mkdirs,users,perf,validate'
+  local LONG_OPTS='vgname:,lvname:,brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,help,version,quiet,debug,_prep,_clean,_setup,_brick-dirs,_vol,_hadoop-dirs,_users,_perf,_validate'
   local task_opt_seen=false
 
   # note: $? *not* set for invalid option errors!
@@ -265,59 +265,65 @@ function parse_cmd(){
 	--debug)
 	    VERBOSE=$LOG_DEBUG; shift; continue
 	;;
-	--clean)
+	--_prep)
+	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
+	    ((DO_BITS|=(1<<PREP_BIT)))
+            task_opt_seen=true
+	    shift; continue
+	;;
+	--_clean)
 	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
 	    ((DO_BITS|=(1<<CLEAN_BIT)))
             task_opt_seen=true
 	    shift; continue
 	;;
-	--setup)
+	--_setup)
 	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
 	    ((DO_BITS|=(1<<SETUP_BIT)))
             # set all of the setup sub-task bits
-            ((DO_BITS|=(1<<SETUP_XFS_BIT)))
+            ((DO_BITS|=(1<<SETUP_BRICKS_BIT)))
             ((DO_BITS|=(1<<SETUP_VOL_BIT)))
             ((DO_BITS|=(1<<SETUP_USERS_BIT)))
-            ((DO_BITS|=(1<<SETUP_DIRS_BIT)))
+            ((DO_BITS|=(1<<SETUP_HDIRS_BIT)))
             task_opt_seen=true
 	    shift; continue
 	;;
-	--xfs)
+        --_brick-dirs)
 	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
 	    ((DO_BITS|=(1<<SETUP_BIT)))
-            ((DO_BITS|=(1<<SETUP_XFS_BIT)))
-            task_opt_seen=true
+	    ((DO_BITS|=(1<<SETUP_BRICKS_BIT)))
+	    task_opt_seen=true
 	    shift; continue
-	;;
-	--vol)
+        ;;
+	--_vol)
 	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
 	    ((DO_BITS|=(1<<SETUP_BIT)))
             ((DO_BITS|=(1<<SETUP_VOL_BIT)))
             task_opt_seen=true
 	    shift; continue
 	;;
-	--mkdirs)
+	--_hadoop-dirs)
 	    # note: vol must be mounted and created
 	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
 	    ((DO_BITS|=(1<<SETUP_BIT)))
-            ((DO_BITS|=(1<<SETUP_DIRS_BIT)))
+            ((DO_BITS|=(1<<SETUP_HDIRS_BIT)))
             task_opt_seen=true
 	    shift; continue
 	;;
-	--users)
+	--_users)
 	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
 	    ((DO_BITS|=(1<<SETUP_BIT)))
             ((DO_BITS|=(1<<SETUP_USERS_BIT)))
             task_opt_seen=true
 	    shift; continue
 	;;
-	--perf)
+	--_perf)
 	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
 	    ((DO_BITS|=(1<<PERF_BIT)))
             task_opt_seen=true
 	    shift; continue
 	;;
-	--validate)
+	--_validate)
 	    [[ $task_opt_seen == false ]] && DO_BITS=0 # clear all bits
 	    ((DO_BITS|=(1<<VALIDATE_BIT)))
 	    ((DO_BITS|=(1<<REPORT_BIT))) # show report summary too
@@ -956,7 +962,7 @@ function verify_gluster_mnt(){
 # 3) delete vol **
 # 4) detach nodes
 # 5) umount vol if mounted
-# 6) unmount brick_mnt if xfs mounted
+# 6) unmount brick_mnt if mounted
 # 7) delete the LV, VG and PV.
 # ** gluster cmd only done once for entire pool; all other cmds executed on
 #    each node
@@ -1020,7 +1026,7 @@ function cleanup(){
   done
 
   # 5) umount vol on every node, if mounted
-  # 6) unmount brick_mnt on every node, if xfs mounted
+  # 6) unmount brick_mnt on every node, if mounted
   # 7) delete the LV, VG and PV on every node
   display "  -- on all nodes:"            $LOG_INFO
   display "       umount $GLUSTER_MNT..." $LOG_INFO
@@ -1069,16 +1075,14 @@ function create_trusted_pool(){
   display "peer probe: $out" $LOG_DEBUG
 }
 
-# xfs_brick_dirs_mnt: invoked by setup(). For each hosts do:
-# - mkfs.xfs brick_dev on every node
+# brick_dirs_mnt: invoked by setup(). For each node do:
 # - mkdir brick_dir and vol_mnt on every node
 # - append brick_dir and gluster mount entries to fstab on every node
 # - mount brick on every node
 # - mkdir brick1/<volname>dir on every node (done after brick mount)
 # - mkdir mapredlocal scratch dir on every node (done after brick mount)
-# Args: $1=node (hostname)
 #
-function xfs_brick_dirs_mnt(){
+function brick_dirs_mnt(){
 
   local out; local node
   local BRICK_MNT_OPTS="noatime,inode64"
@@ -1086,15 +1090,6 @@ function xfs_brick_dirs_mnt(){
 
   for node in "${HOSTS[@]}" ; do
       display "On $node:" $LOG_DEBUG
-      # mkfs.xfs
-      out="$(ssh -oStrictHostKeyChecking=no root@$node "
-	    mkfs -t xfs -i size=512 -f "$LV_BRICK" 2>&1")"
-      if (( $? != 0 )) ; then
-	display "ERROR: $node: mkfs.xfs on brick $LV_BRICK: $out" $LOG_FORCE
-	exit 33
-      fi
-      display " * mkfs.xfs on $LV_BRICK: $out" $LOG_DEBUG
-
       # make brick and vol mnt dirs
       # note: must be done before the brick mount
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
@@ -1255,8 +1250,8 @@ function create_hadoop_dirs(){
 # setup: create a directory, owner, permissions, mounts environment for Hadoop
 # jobs. Note that the order below is very important, particualarly creating DFS
 # directories and their permissions *after* the mount.
-#  1) mkfs.xfs brick_dev
-#  2) mkdir brick_dir; mkdir vol_mnt
+#  1) mkdir brick_dir
+#  2) mkdir vol_mnt
 #  3) append mount entries to fstab
 #  4) mount brick
 #  5) mkdir mapredlocal scratch dir (must be done after brick mount!)
@@ -1288,19 +1283,18 @@ function setup(){
   local MAPRED_U='mapred'
   local MR_USERS=("$MAPRED_U" "$YARN_U" "$HBASE_U")
 
-  if (( DO_SETUP_XFS )) ; then
-    # 1) mkfs.xfs brick_dev on every node
-    # 2) mkdir brick_dir and vol_mnt on every node
+  if (( DO_SETUP_BRICKS )) ; then
+    # 1) mkdir brick_dir on every node
+    # 2) mkdir vol_mnt on every node
     # 3) append brick_dir and gluster mount entries to fstab on every node
     # 4) mount brick on every node
     # 5) mkdir mapredlocal scratch dir on every node (done after brick mount)
     display "  -- on all nodes:"                           $LOG_INFO
-    display "       mkfs.xfs on block-device"              $LOG_INFO
     display "       mkdir $BRICK_DIR, $GLUSTER_MNT and $MAPRED_SCRATCH_DIR..." \
 	$LOG_INFO
     display "       append mount entries to /etc/fstab..." $LOG_INFO
     display "       mount $BRICK_DIR..."                   $LOG_INFO
-    xfs_brick_dirs_mnt
+    brick_dirs_mnt
   fi
 
   if (( DO_SETUP_VOL )) ;then
@@ -1364,7 +1358,7 @@ function setup(){
     verify_user_uids ${MR_USERS[@]}
   fi
 
-  if (( DO_SETUP_DIRS )) ; then
+  if (( DO_SETUP_HDIRS )) ; then
     # 11) create distributed mapred/system and mr-history/done dirs
     # 12) chmod on the gluster mnt and the mapred scracth dir
     # 13) chown on the gluster mnt and mapred scratch dir
@@ -1619,13 +1613,13 @@ firstNode=${HOSTS[0]}
 
 # set DO_xxx globals based on DO_BITS
 ((DO_REPORT=(DO_BITS>>REPORT_BIT) % 2)) # 1 --> do it
-((DO_INSTALL=(DO_BITS>>INSTALL_BIT) % 2))
+((DO_PREP=(DO_BITS>>PREP_BIT) % 2))
 ((DO_CLEAN=(DO_BITS>>CLEAN_BIT) % 2))
 ((DO_SETUP=(DO_BITS>>SETUP_BIT) % 2)) # 0 --> defeats all setup tasks
-((DO_SETUP_XFS=(DO_BITS>>SETUP_XFS_BIT) % 2))
+((DO_SETUP_BRICKS=(DO_BITS>>SETUP_BRICKS_BIT) % 2))
 ((DO_SETUP_VOL=(DO_BITS>>SETUP_VOL_BIT) % 2))
 ((DO_SETUP_USERS=(DO_BITS>>SETUP_USERS_BIT) % 2))
-((DO_SETUP_DIRS=(DO_BITS>>SETUP_DIRS_BIT) % 2))
+((DO_SETUP_HDIRS=(DO_BITS>>SETUP_HDIRS_BIT) % 2))
 ((DO_PERF=(DO_BITS>>PERF_BIT) % 2))
 ((DO_VALIDATE=(DO_BITS>>VALIDATE_BIT) % 2))
 
@@ -1634,7 +1628,7 @@ firstNode=${HOSTS[0]}
 (( DO_VALIDATE )) && validate_nodes # prompts and may exit
 
 # per-node install and config...
-(( DO_INSTALL )) && install_nodes
+(( DO_PREP )) && install_nodes
 
 echo
 display '----------------------------------------' $LOG_SUMMARY
@@ -1662,7 +1656,7 @@ if (( DO_PERF )) ; then
 fi
 
 # reboot nodes if needed
-(( DO_INSTALL )) && reboot_nodes
+(( DO_PREP )) && reboot_nodes
 
 echo
 display "**** This script can be re-run anytime! ****" $LOG_REPORT

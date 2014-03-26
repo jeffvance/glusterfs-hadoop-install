@@ -16,6 +16,7 @@
 #  - ensures that ntp is running correctly,
 #  - disables the firewall,
 #  - creates a PV, VG and LV based on the block-dev and LV/VG-names,
+#  - creates an XFS file system on the LV-device path,
 #  - installs the gluster-hadoop plugin, if present in any of the sub-
 #    directories from which install.sh is run.
 #
@@ -47,6 +48,7 @@
 eval 'declare -A _ARGS='${1#*=} # delete the "declare -A name=" portion of arg
 NODE="${_ARGS[NODE]}"
 BLOCK_DEV="${_ARGS[BLOCK_DEV]}"
+LV_BRICK="${_ARGS[LV_BRICK]}"
 VG_NAME="${_ARGS[VG_NAME]}"
 LV_NAME="${_ARGS[LV_NAME]}"
 STORAGE_INSTALL="${_ARGS[INST_STORAGE]}" # true or false
@@ -203,35 +205,21 @@ function disable_firewall(){
   display "chkconfig off: $out" $LOG_DEBUG
 }
 
-# install_common: perform common installation steps for all nodes, regardless
-# of whether the node is to be a management server or a storage/data node.
-# Note: a node can be both.
+# setup_xfs: mkfs.xfs on the block device. Arg 1=LV-device-path
 #
-function install_common(){
+function setup_xfs(){
 
-  # disable firewall
-  echo
-  display "-- Disable firewall" $LOG_SUMMARY
-  disable_firewall
+  local LV=$1
+  local out; local err
 
-  # potentially append local hosts file entries to /etc/hosts, if not using dns
-  if [[ $USING_DNS == false ]] ; then # ok to update /etc/hosts
-    echo
-    display "-- Setting up IP -> hostname mapping" $LOG_SUMMARY
-    fixup_etc_hosts_file
+  # mkfs.xfs
+  out="$(mkfs -t xfs -i size=512 -f $LV 2>&1)"
+  err=$?
+  display "   mkfs.xfs out: $out" $LOG_DEBUG
+  if (( err != 0 )) ; then
+    display "ERROR: mkfs.xfs on $LV: $out" $LOG_FORCE
+    exit 12
   fi
-
-  # set hostname, if not set
-  [[ -z "$(hostname)" ]] && hostname $NODE
-
-  # set up sudoers file for mapred and yarn users
-  # Note: sudoers is handled in the rhs-hadoop (plugin) pgk now...
-  #sudoers
-
-  # verify NTP setup and sync clock
-  echo
-  display "-- Verifying NTP is running" $LOG_SUMMARY
-  verify_ntp
 }
 
 # create_pv: initialize a physical volume for use by LVM based on the passed-in
@@ -303,15 +291,47 @@ function create_lv(){
   fi
 }
 
+# install_common: perform common installation steps for all nodes, regardless
+# of whether the node is to be a management server or a storage/data node.
+# Note: a node can be both.
+#
+function install_common(){
+
+  # disable firewall
+  echo
+  display "-- Disable firewall" $LOG_SUMMARY
+  disable_firewall
+
+  # potentially append local hosts file entries to /etc/hosts, if not using dns
+  if [[ $USING_DNS == false ]] ; then # ok to update /etc/hosts
+    echo
+    display "-- Setting up IP -> hostname mapping" $LOG_SUMMARY
+    fixup_etc_hosts_file
+  fi
+
+  # set hostname, if not set
+  [[ -z "$(hostname)" ]] && hostname $NODE
+
+  # verify NTP setup and sync clock
+  echo
+  display "-- Verifying NTP is running" $LOG_SUMMARY
+  verify_ntp
+}
+
 # install_storage: perform the installation steps needed when the node is a
 # storage/data node.
 #
 function install_storage(){
 
   display "-- LVM setup:" $LOG_INFO
+
+  # LVM setup
   create_pv $BLOCK_DEV
   create_vg $VG_NAME $BLOCK_DEV
   create_lv $LV_NAME $VG_NAME
+
+  # xfs
+  setup_xfs $LV_BRICK
 
   # install glusterfs-hadoop plugin, if provided in the package.
   install_plugin

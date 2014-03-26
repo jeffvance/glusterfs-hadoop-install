@@ -1070,12 +1070,12 @@ function create_trusted_pool(){
 }
 
 # xfs_brick_dirs_mnt: invoked by setup(). For each hosts do:
-#   mkfs.xfs brick_dev on every node
-#   mkdir brick_dir and vol_mnt on every node
-#   append brick_dir and gluster mount entries to fstab on every node
-#   mount brick on every node
-#   mkdir brick1/<volname>dir on every node (done after brick mount)
-#   mkdir mapredlocal scratch dir on every node (done after brick mount)
+# - mkfs.xfs brick_dev on every node
+# - mkdir brick_dir and vol_mnt on every node
+# - append brick_dir and gluster mount entries to fstab on every node
+# - mount brick on every node
+# - mkdir brick1/<volname>dir on every node (done after brick mount)
+# - mkdir mapredlocal scratch dir on every node (done after brick mount)
 # Args: $1=node (hostname)
 #
 function xfs_brick_dirs_mnt(){

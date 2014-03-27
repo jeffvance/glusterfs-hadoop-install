@@ -295,9 +295,7 @@ function pv_present(){
 
   local pv="$1"
 
-  if pvs $pv >& /dev/null ; then return 0
-  else return 1
-  fi
+  pvs $pv >& /dev/null
 }
 
 # vg_present: return 0(shell true) if the passed in VG exists.
@@ -306,18 +304,16 @@ function vg_present(){
 
   local vg="$1"
 
-  if vgs $vg >& /dev/null ; then return 0
-  else return 1
-  fi
+  vgs $vg >& /dev/null
 }
 
-# lv_present: return 0(shell true) if the passed in LV/VG exists.
+# lv_present: return 0(shell true) if the passed in LV-dev path exists.
+# Note: lv is expected to passed in as /dev/VG/LV.
 #
 function lv_present(){
 
-  local vg="$1"; local lv="$2"
+  local lvpath="$1"
 
-  if lvs $vg | grep -w -qs $lv ; then return 0
-  else return 1
-  fi
+  lvs $lvpath >& /dev/null
 }
+

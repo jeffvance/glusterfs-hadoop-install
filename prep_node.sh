@@ -15,7 +15,7 @@
 #    otherwise, dns is assumed and /etc/hosts is not modified.
 #  - ensures that ntp is running correctly,
 #  - disables the firewall,
-#  - creates a PV, VG and LV based on the block-dev and LV/VG-names,
+#  - (optionally) creates a PV, VG, LV based on the brick-dev and LV/VG-names,
 #  - creates an XFS file system on the LV-device path,
 #  - installs the gluster-hadoop plugin, if present in any of the sub-
 #    directories from which install.sh is run.
@@ -47,7 +47,7 @@
 # constants and args
 eval 'declare -A _ARGS='${1#*=} # delete the "declare -A name=" portion of arg
 NODE="${_ARGS[NODE]}"
-BLOCK_DEV="${_ARGS[BLOCK_DEV]}"
+BRICK_DEV="${_ARGS[BRICK_DEV]}"
 LV_BRICK="${_ARGS[LV_BRICK]}"
 VG_NAME="${_ARGS[VG_NAME]}"
 LV_NAME="${_ARGS[LV_NAME]}"
@@ -57,6 +57,7 @@ VERBOSE="${_ARGS[VERBOSE]}"  # needed by display()
 LOGFILE="${_ARGS[PREP_LOG]}" # needed by display()
 DEPLOY_DIR="${_ARGS[REMOTE_DIR]}"
 USING_DNS=${_ARGS[USING_DNS]} # true|false
+LVM=${_ARGS[LVM]} # true|false
 HOSTS=($2)
 HOST_IPS=($3)
 NUMNODES=${#HOSTS[@]}
@@ -205,7 +206,7 @@ function disable_firewall(){
   display "chkconfig off: $out" $LOG_DEBUG
 }
 
-# setup_xfs: mkfs.xfs on the block device. Arg 1=LV-device-path
+# setup_xfs: mkfs.xfs on the brick device. Arg 1=LV-device-path
 #
 function setup_xfs(){
 
@@ -218,7 +219,7 @@ function setup_xfs(){
   display "   mkfs.xfs out: $out" $LOG_DEBUG
   if (( err != 0 )) ; then
     display "ERROR: mkfs.xfs on $LV: $out" $LOG_FORCE
-    exit 12
+    exit 13
   fi
 }
 
@@ -235,13 +236,25 @@ function create_pv(){
     return
   fi
 
+  if [[ ! -e $pv || ! -b $pv || -L $pv ]] ; then
+    if [[ ! -e $pv ]] ; then
+      display "ERROR: \"$pv\" does not exist, can't create PV" $LOG_FORCE
+    elif [[ ! -b $pv ]] ; then
+      display "ERROR: \"$pv\" is not a raw block device, can't create PV" \
+	$LOG_FORCE
+    else
+      display "ERROR: \"$pv\" is a link, can't create PV" $LOG_FORCE
+    fi
+    exit 15
+  fi
+
   display "   pvcreate of $pv:" $LOG_INFO
   out="$(pvcreate --dataalignment $DATA_ALIGN -y $pv 2>&1)"
   err=$?
   display "   pvcreate out: $out" $LOG_DEBUG
   if (( err != 0 )) ; then
     display "ERROR $err: pvcreate on $pv failed" $LOG_FORCE
-    exit 13
+    exit 17
   fi
 }
 
@@ -264,7 +277,7 @@ function create_vg(){
   display "   vgcreate out: $out" $LOG_DEBUG
   if (( err != 0 )) ; then
     display "ERROR $err: vgcreate of $vg failed" $LOG_FORCE
-    exit 15
+    exit 19
   fi
 }
 
@@ -276,7 +289,7 @@ function create_lv(){
   local lv="$1"; local vg="$2"
   local err; local out; local EXT_FREE='100%FREE'
 
-  if lv_present $vg $lv ; then
+  if lv_present $LV_BRICK ; then
     display "INFO: logical volume \"$lv\" already exists" $LOG_DEBUG
     return
   fi
@@ -287,7 +300,7 @@ function create_lv(){
   display "   lvcreate out: $out" $LOG_DEBUG
   if (( err != 0 )) ; then
     display "ERROR $err: lvcreate of $lv from $vg failed" $LOG_FORCE
-    exit 17
+    exit 21
   fi
 }
 
@@ -320,15 +333,27 @@ function install_common(){
 
 # install_storage: perform the installation steps needed when the node is a
 # storage/data node.
+# NOTE: LVM setup commented out of "normal" workflow.
 #
 function install_storage(){
 
-  display "-- LVM setup:" $LOG_INFO
+  if [[ "$LVM" == true ]] ; then
+    display "-- LVM setup:" $LOG_INFO
+    create_pv $BRICK_DEV
+    create_vg $VG_NAME $BRICK_DEV
+    create_lv $LV_NAME $VG_NAME
+  fi
 
-  # LVM setup
-  create_pv $BLOCK_DEV
-  create_vg $VG_NAME $BLOCK_DEV
-  create_lv $LV_NAME $VG_NAME
+  # ensure that the brick-dev is a LV, in cases where --lvm not specified
+  if ! lv_present $LV_BRICK ; then
+    if [[ -b $BRICK_DEV && ! -L $BRICK_DEV ]] ; then
+      display "ERROR: $BRICK_DEV must be a logical volume but appears to be a raw block\n  device. Expecting: /dev/VGname/LVname" $LOG_FORCE
+    else
+      display "ERROR: logical volume path $BRICK_DEV does not exist" \
+	$LOG_FORCE
+    fi
+    exit 23
+  fi
 
   # xfs
   setup_xfs $LV_BRICK

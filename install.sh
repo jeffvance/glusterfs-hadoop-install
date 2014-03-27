@@ -26,7 +26,7 @@
 initialize_globals(){
 
   SCRIPT=$(basename $0)
-  INSTALL_VER='0.80' # self version
+  INSTALL_VER='0.81' # self version
 
   # flag if we're doing an rhs related install, set before parsing args
   [[ -d glusterfs ]] && RHS_INSTALL=false || RHS_INSTALL=true
@@ -370,7 +370,7 @@ function parse_cmd(){
 #
 function check_cmdline(){
 
-  local RAW_BLOCK_DEV_RE='/dev/[sv]d.$'
+  local RAW_BLOCK_DEV_RE='/dev/[sv]d[a-z]*[0-9]*$'
 
   # validate replica cnt for RHS
   if (( REPLICA_CNT != 2 )) ; then
@@ -390,20 +390,18 @@ function check_cmdline(){
   fi
 
   # lvm checks
-  if (( ! DO_CLEAN )) ; then  # skip checking in clean mode
-    if [[ "$LVM" == false ]] ; then
-      if [[ "$VG_NAME" != "$VG_DEFAULT" || "$LV_NAME" != "$LV_DEFAULT" ]]; then
-	echo "ERROR: cannot use --vgname and/or --lvname without also specifying --lvm"
-	exit -1
-      fi
-      if [[ "$BRICK_DEV" =~ $RAW_BLOCK_DEV_RE ]] ; then
-	echo "ERROR: expect a logical volume (LV) brick path, e.g. /dev/VG/LV"
-	exit -1
-      fi
-    elif [[ ! "$BRICK_DEV" =~ $RAW_BLOCK_DEV_RE ]] ; then
-      echo "ERROR: expect a raw block brick device path, e.g. /dev/sdb"
+  if [[ "$LVM" == false ]] ; then
+    if [[ "$VG_NAME" != "$VG_DEFAULT" || "$LV_NAME" != "$LV_DEFAULT" ]]; then
+      echo "ERROR: cannot use --vgname and/or --lvname without also specifying --lvm"
       exit -1
     fi
+    if [[ "$BRICK_DEV" =~ $RAW_BLOCK_DEV_RE ]] ; then
+      echo "ERROR: expect a logical volume (LV) brick path, e.g. /dev/VG/LV"
+      exit -1
+    fi
+  elif [[ ! "$BRICK_DEV" =~ $RAW_BLOCK_DEV_RE ]] ; then
+    echo "ERROR: expect a raw block brick device path, e.g. /dev/sdb"
+    exit -1
   fi
 }
 
@@ -1017,7 +1015,8 @@ function verify_gluster_mnt(){
 # 4) detach nodes
 # 5) umount vol if mounted
 # 6) unmount brick_mnt if mounted
-# 7) delete the LV, VG and PV.
+# 7) remove the brick and gluster mount records from /etc/fstab
+# 8) delete the LV, VG and PV.
 # ** gluster cmd only done once for entire pool; all other cmds executed on
 #    each node
 #
@@ -1082,10 +1081,12 @@ function cleanup(){
 
   # 5) umount vol on every node, if mounted
   # 6) unmount brick_mnt on every node, if mounted
-  # 7) delete the LV, VG and PV on every node
+  # 7) remove the brick and gluster mount records from /etc/fstab
+  # 8) delete the LV, VG and PV on every node
   display "  -- on all nodes:"            $LOG_INFO
   display "       umount $GLUSTER_MNT..." $LOG_INFO
   display "       umount $BRICK_DIR..."   $LOG_INFO
+  display "       update /etc/fstab..."   $LOG_INFO
   [[ $LVM == true ]] && display "       delete LV, VG, PV..." $LOG_INFO
   for (( i=0; i<$NUMNODES; i++ )); do
       node=${HOSTS[$i]}
@@ -1097,6 +1098,12 @@ function cleanup(){
           if grep -qs $BRICK_DIR /proc/mounts ; then
             umount $BRICK_DIR 2>&1
           fi
+	  if grep -wqs $BRICK_DIR /etc/fstab ; then # delete from fstab
+	    sed -i '\|$BRICK_DIR|d' /etc/fstab
+	  fi
+	  if grep -wqs $GLUSTER_MNT /etc/fstab ; then # delete from fstab
+	    sed -i '\|$GLUSTER_MNT|d' /etc/fstab
+	  fi
 	  if [[ $LVM == true ]] ; then
 	    source ${REMOTE_INSTALL_DIR}functions
 	    if lv_present $LV_BRICK ; then
@@ -1661,7 +1668,15 @@ echo
 display "-- Verifying deployment environment, including the \"hosts\" file format:" $LOG_INFO
 verify_local_deploy_setup
 
-# lv brick is independent of physical bricks used to create the PV
+# validate command line options
+check_cmdline
+
+# set VG/LV names an LV_BRICK based on options and brick-dev
+if [[ $LVM == false ]] ; then  # vg/lv names are defaults, set to brick-dev
+  LV_NAME="${BRICK_DEV##*/}"
+  VG_NAME="${BRICK_DEV#*dev/}" # "vg/lv"
+  VG_NAME="${VG_NAME%/*}"
+fi
 LV_BRICK="/dev/$VG_NAME/$LV_NAME"
 
 # convention is to use the volname as the subdir under the brick as the mnt
@@ -1680,8 +1695,6 @@ firstNode=${HOSTS[0]}
 ((DO_SETUP_HDIRS=(DO_BITS>>SETUP_HDIRS_BIT) % 2))
 ((DO_PERF=(DO_BITS>>PERF_BIT) % 2))
 ((DO_VALIDATE=(DO_BITS>>VALIDATE_BIT) % 2))
-
-check_cmdline
 
 ## start tasks: ##
 (( DO_REPORT )) && report_deploy_values

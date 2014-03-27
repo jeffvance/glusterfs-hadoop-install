@@ -758,7 +758,7 @@ function fix_vol_stop_delete(){
 function verify_vol_stop_delete(){
 
   local stop_del_err=$1; local errmsg="$2"
-  local out; local i=0; local SLEEP=2; local LIMIT=$((NUMNODES * 2))
+  local out; local i=0; local SLEEP=5; local LIMIT=$((NUMNODES * 2))
   local EXPCT_VOL_STATUS_ERR="Volume $VOLNAME does not exist"
   local STAGING_FAILED='Staging failed on '
 
@@ -797,7 +797,7 @@ function verify_vol_stop_delete(){
 function verify_peer_detach(){
 
   local first=$1 # first time verifying?
-  local out; local i=0; local SLEEP=2; local LIMIT=$((NUMNODES * 1))
+  local out; local i=0; local SLEEP=5; local LIMIT=$((NUMNODES * 1))
   local err_warn='WARN'; local rtn=0
 
   (( first != 0 )) && err_warn='ERROR'
@@ -829,7 +829,7 @@ function verify_peer_detach(){
 function verify_pool_created(){
 
   local DESIRED_STATE='Peer in Cluster'
-  local out; local i=0; local SLEEP=2; local LIMIT=$((NUMNODES * 2))
+  local out; local i=0; local SLEEP=5; local LIMIT=$((NUMNODES * 2))
 
   # out contains lines where the state != desired state, which is a problem
   # note: need to use scratch file rather than a variable since the
@@ -869,7 +869,7 @@ function verify_pool_created(){
 function verify_vol_created(){
 
   local volCreateErr=$1; local bricks="$2"
-  local i=0; local out; local SLEEP=2; local LIMIT=$((NUMNODES * 5))
+  local i=0; local out; local SLEEP=5; local LIMIT=$((NUMNODES * 5))
   local VOL_CREATED='Created'
 
   while (( i < LIMIT )) ; do # don't loop forever
@@ -900,7 +900,7 @@ function verify_vol_created(){
 # of attempts have been made (the "last" arg == true) and if the vol is still
 # not started this function exits with an error. A volume is considered started
 # once all bricks are online, though another way to detect this could be to
-# check the Status: value of the vol info command.
+# check the "Status:" value of the vol info command.
 # Args:
 #   $1=true/false if this is the last attempt
 #   $2=exit return from gluster vol start command.
@@ -909,7 +909,7 @@ function verify_vol_started(){
 
   local last=$1; local volStartErr=$2
   local err_warn='WARN'; local rtn=0
-  local i=0; local out; local SLEEP=2; local LIMIT=$((NUMNODES * 2))
+  local i=0; local out; local SLEEP=5; local LIMIT=$((NUMNODES * 2))
   local FILTER='^Online' # grep filter
   local ONLINE=': Y'     # grep not-match value
   local TRANS_IN_PROGRESS='Another transaction is in progress'
@@ -1595,20 +1595,33 @@ function reboot_nodes(){
   done
 }
 
-# perf_config: assign the non-default gluster volume attributes below.
+# perf_config: assign the non-default gluster volume attributes below. If the'
+# gluster perf settings fail (could be due to a slow cluster) then repeat until
+# success or a certain number of attempts have been made.
 #
 function perf_config(){
 
-  local out; local err
+  local err; local out
+  local i=0; local SLEEP=5; local LIMIT=$((NUMNODES * 1))
 
-  out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+  while true ; do # break on success or final failure...
+      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
 	gluster volume set $VOLNAME quick-read off 2>&1
 	gluster volume set $VOLNAME cluster.eager-lock on 2>&1
 	gluster volume set $VOLNAME performance.stat-prefetch off 2>&1")"
-  err=$?
-  display "gluster perf: $out" $LOG_DEBUG
-  if (( err != 0 )) ; then
-    display "WARN $err: gluster performance config warning" $LOG_FORCE
+      err=$?
+      (( err == 0 )) && break # done, success
+      display "WARN $err: gluster perf: $out" $LOG_DEBUG
+      (( i >= LIMIT )) && break # done, failed
+      sleep $SLEEP
+      ((i++))
+      display "...verify gluster perf wait: $((i*SLEEP)) seconds" $LOG_DEBUG
+  done
+
+  if (( i < LIMIT )) ; then 
+    display "   gluster perf: $out" $LOG_INFO
+  else
+    display "ERROR: gluster perf: $out" $LOG_FORCE
   fi
 }
 

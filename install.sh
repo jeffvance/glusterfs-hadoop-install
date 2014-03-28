@@ -26,7 +26,7 @@
 initialize_globals(){
 
   SCRIPT=$(basename $0)
-  INSTALL_VER='0.81' # self version
+  INSTALL_VER='0.82' # self version
 
   # flag if we're doing an rhs related install, set before parsing args
   [[ -d glusterfs ]] && RHS_INSTALL=false || RHS_INSTALL=true
@@ -486,7 +486,7 @@ function report_deploy_values(){
   display "  Number of nodes:    $NUMNODES"         $LOG_REPORT
   display "  Management node:    $MGMT_NODE"        $LOG_REPORT
   display "  Volume name:        $VOLNAME"          $LOG_REPORT
-  display "  # of replicas:      $REPLICA_CNT"      $LOG_REPORT
+  display "  Number of replicas: $REPLICA_CNT"      $LOG_REPORT
   display "  Volume mount:       $GLUSTER_MNT"      $LOG_REPORT
   display "  XFS device path(s)  $report_brick"     $LOG_REPORT
   display "  XFS brick dir:      $BRICK_DIR"        $LOG_REPORT
@@ -660,16 +660,20 @@ function start_gluster(){
   done
 }
 
-# verify_hadoop_gid: check that the gid for the passed-in group is
-# the same on all nodes. Args: $1=group name
+# verify_hadoop_gid: check that the gid for the passed-in group is the same on
+# all nodes. Note: the mgmt-node, if outside of the storage pool, needs to be
+# included in the consistency test.
+# Args: $1=group name
 #
 function verify_hadoop_gid(){
 
   local grp="$1"
-  local node; local out; local gid
-  local gids=(); local uniq_gids=()
+  local node; local i; local out; local gid; local mgmt_node=''
+  local gids=(); local uniq_gids=(); local nodes=()
 
-  for node in "${HOSTS[@]}" ; do
+  [[ -z "$MGMT_NODE_IN_POOL" ]] && mgmt_node="$MGMT_NODE" # outside of pool
+
+  for node in ${HOSTS[@]} $mgmt_node ; do
       out="$(ssh -oStrictHostKeyChecking=no root@$node "getent group $grp")"
       if (( $? != 0 )) || [[ -z "$out" ]] ; then
 	display "ERROR: group $grp not created on $node" $LOG_FORCE
@@ -678,42 +682,59 @@ function verify_hadoop_gid(){
       # extract gid, "hadoop:x:<gid>", eg hadoop:x:500;
       gid=${out%:}   # delete trailing colon
       gid=${gid##*:} # extract gid
-      gids+=($gid)
+      gids+=($gid)   # in node order
+      nodes+=($node) # to include mgmt-node if needed
   done
 
   uniq_gids=($(printf '%s\n' "${gids[@]}" | sort -u))
   if (( ${#uniq_gids[@]} > 1 )) ; then
-    display "ERROR: \"$grp\" group has inconsistent GIDs across the cluster. $grp GIDs: ${uniq_gids[*]}" $LOG_FORCE
+    display "ERROR: \"$grp\" group has inconsistent GIDs across the cluster. GIDs: ${uniq_gids[*]} -- see $LOGFILE" $LOG_FORCE
+    for (( i=0; i<${#nodes[@]}; i++ )); do
+	display "  node: ${nodes[$i]} has $grp GID: ${gids[$i]}" $LOG_DEBUG
+    done
     exit 6
   fi
 }
 
-# verify_user_uids: check that the uid for the passed-in user(s) is
-# the same on all nodes. Args: $@=user names
+# verify_user_uids: check that the uid for the passed-in user(s) is the same
+# on all nodes. Note: the mgmt-node, if outside the trusted pool, needs to be
+# included in the consistency check.
+# Args: $@=user names
 #
 function verify_user_uids(){
 
   local users=($@)
-  local node; local out; local user
-  local uids; local uniq_uids
+  local node; local i; local out; local errcnt=0
+  local user; local mgmt_node=''
+  local uids; local uniq_uids; local nodes
+
+  [[ -z "$MGMT_NODE_IN_POOL" ]] && mgmt_node="$MGMT_NODE" # outside of pool
 
   for user in "${users[@]}" ; do
-     uids=()
-     for node in "${HOSTS[@]}" ; do
+     uids=(); nodes=()
+     for node in ${HOSTS[@]} $mgmt_node ; do
 	out="$(ssh -oStrictHostKeyChecking=no root@$node "id -u $user")"
 	if (( $? != 0 )) || [[ -z "$out" ]] ; then
 	  display "ERROR: user $user not created on $node" $LOG_FORCE
 	  exit 9
 	fi
-	uids+=($out)
+	uids+=($out)   # in node order
+	nodes+=($node) # to include mgmt-node if needed
      done
 
      uniq_uids=($(printf '%s\n' "${uids[@]}" | sort -u))
      if (( ${#uniq_uids[@]} > 1 )) ; then
-       display "ERROR: \"$user\" user has inconsistent UIDs across cluster. $user UIDs: ${uniq_uids[*]}" $LOG_FORCE
-       exit 12
+       display "ERROR: \"$user\" user has inconsistent UIDs across cluster. UIDs: ${uniq_uids[*]}" $LOG_FORCE
+       for (( i=0; i<${#nodes[@]}; i++ )); do
+	   display "  node: ${nodes[$i]} has $user UID: ${uids[$i]}" $LOG_DEBUG
+       done
+       ((errcnt++))
      fi
   done
+
+  (( errcnt > 0 )) &&  { 
+	display "See $LOGFILE for more info on above error(s)"  $LOG_FORCE;
+	exit 12; }
 }
 
 # fix_vol_stop_delete: re-kill gluster using -9, rm current state in
@@ -1228,46 +1249,65 @@ function mount_volume(){
   verify_gluster_mnt "$node"  # important for later chmod/chown
 }
 
-# create_hadoop_group: on the passed-in node, create the haddop group if it
-# does not already exist.
-# Args: $1=node (hostname), $2=hadoop group name
+# create_hadoop_group: create the passed-in group if it does not already exist.
+# Note: the mgmt-node, if outside the storage pool, needs to be included.
+# Args: $1=hadoop group name
 #
 function create_hadoop_group(){
 
-  local node="$1"; local grp="$2"; local out
+  local grp="$1"
+  local node; local out; local err; local mgmt_node=''
 
-  # create hadoop group, if needed
-  out="$(ssh -oStrictHostKeyChecking=no root@$node "
+  [[ -z "$MGMT_NODE_IN_POOL" ]] && mgmt_node="$MGMT_NODE" # outside of pool
+
+  for node in ${HOSTS[@]} $mgmt_node; do
+      # create hadoop group, if needed
+      out="$(ssh -oStrictHostKeyChecking=no root@$node "
 	if ! getent group $grp >/dev/null ; then
-	  groupadd --system $grp 2>&1 # note: no password
+	  echo 'on $node: create $grp group'
+	  groupadd --system $grp 2>&1 # no password
 	fi")"
-  (( $? != 0 )) && {
-    display "ERROR: $node: groupadd $grp: $out" $LOG_FORCE; exit 55; }
-
-  display "groupadd $grp: $out" $LOG_DEBUG
+      err=$?
+      display "groupadd $grp: $out" $LOG_DEBUG
+      (( err != 0 )) && {
+	display "ERROR $err on $node: $out" $LOG_FORCE;
+	exit 55; }
+  done
 }
 
-# create_hadoop_users: for the passed-in node, create the users needed for
-# typical hadoop jobs, if they do not already exist.
-# Args: $1=node (hostname), $2=hadoop group name,
-#       $3 *name* of array of YARN/MR users
+# create_hadoop_users: create the passed-in hadoop users on all nodes. Note: if
+# the mgmt-node is outside of the trusted pool then it needs to be included as
+# one of the nodes where users are added.
+# Args: $1=hadoop group name, $2 *name* of array of YARN/MR users
 #
 function create_hadoop_users(){
 
-  local node="$1"; local grp="$2"; local user_names="$3"
-  users=("${!user_names}") # array of user names
-  local out; local user
+  local grp="$1"; local user_names="$2"
+  local users=("${!user_names}") # array of user names
+  local node; local out; local user; local mgmt_node=''
 
-  # create the required M/R-YARN users, if needed
-  for user in "${users[@]}" ; do
-      out="$(ssh -oStrictHostKeyChecking=no root@$node "
+  [[ -z "$MGMT_NODE_IN_POOL" ]] && mgmt_node="$MGMT_NODE" # outside of pool
+
+  for node in ${HOSTS[@]} $mgmt_node; do
+      # create the required M/R-YARN users, if needed
+      for user in "${users[@]}" ; do
+	  out="$(ssh -oStrictHostKeyChecking=no root@$node "
 	     if ! getent passwd $user >/dev/null ; then
- 		useradd --system -g $HADOOP_G $user 2>&1
+		echo 'on $node: create users'
+		useradd --system -g $HADOOP_G $user 2>&1
+		rc=\$?
+		if (( rc == 0 )) ; then
+		  echo '...success '
+		else
+		  echo '...error \$rc '
+		fi
 	     fi")"
-      (( $? != 0 )) && {
-	display "ERROR: $node: useradd $user: $out" $LOG_FORCE;
-	exit 58; }
-      display "useradd $user: $out" $LOG_DEBUG
+	  display "useradd $user: $out" $LOG_DEBUG
+	  if grep -qs 'error' <<<$out ; then
+ 	    display "ERROR on $node: $out" $LOG_FORCE
+	    exit 58
+	  fi
+      done
   done
 }
 
@@ -1406,17 +1446,11 @@ function setup(){
     # 10) create the mapred and yarn users, and the hadoop group on each node
     display "  -- on all nodes:"                         $LOG_INFO
     display "       create users and group as needed..." $LOG_INFO
-    for node in "${HOSTS[@]}"; do
-	display "-- $node -- create $HADOOP_G group" $LOG_INFO
-	create_hadoop_group "$node" "$HADOOP_G"
-    done
+    create_hadoop_group "$HADOOP_G"
     # validate consistent hadoop group GID across cluster
     verify_hadoop_gid "$HADOOP_G"
     # create users
-    for node in "${HOSTS[@]}"; do
-	display "-- $node -- create users" $LOG_INFO
-	create_hadoop_users "$node" "$HADOOP_G" MR_USERS[@] # last arg is *name*
-    done
+    create_hadoop_users "$HADOOP_G" MR_USERS[@] # last arg is *name*
     # validate consistent m/r-yarn user IDs across cluster
     verify_user_uids ${MR_USERS[@]}
   fi

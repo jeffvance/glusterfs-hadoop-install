@@ -124,8 +124,8 @@ function verify_local_deploy_setup(){
   #   BRICKS()
   #   USING_DNS, true or false, depending on content of local ./hosts file
   #   NUMNODES
-  #   MGMT_NODE
-  #   MGMT_NODE_IN_POOL
+  #   MGMT_NODE (set only if not supplied as --mgmt-node option)
+  #   MGMT_NODE_IN_POOL (set only if true, false == not set)
   # 
   function read_verify_local_hosts_file(){
 

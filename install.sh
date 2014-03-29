@@ -679,8 +679,8 @@ function verify_hadoop_gid(){
 	display "ERROR: group $grp not created on $node" $LOG_FORCE
 	exit 4
       fi
-      # extract gid, "hadoop:x:<gid>", eg hadoop:x:500;
-      gid=${out%:}   # delete trailing colon
+      # extract gid, "hadoop:x:<gid>", eg hadoop:x:500:users
+      gid=${out%:*}  # delete ":users"
       gid=${gid##*:} # extract gid
       gids+=($gid)   # in node order
       nodes+=($node) # to include mgmt-node if needed
@@ -1111,7 +1111,15 @@ function cleanup(){
   [[ $LVM == true ]] && display "       delete LV, VG, PV..." $LOG_INFO
   for (( i=0; i<$NUMNODES; i++ )); do
       node=${HOSTS[$i]}
+      # set VG/LV names and LV_BRICK based on options and brick-dev
       [[ -n "$BRICK_DEV" ]] && brick="$BRICK_DEV" || brick="${BRICKS[$i]}"
+      if [[ $LVM == false ]]; then  # vg/lv names are defaults, set to brick
+	LV_NAME="${brick##*/}"
+	VG_NAME="${brick#*dev/}" # "vg/lv"
+	VG_NAME="${VG_NAME%/*}"
+      fi
+      LV_BRICK="/dev/$VG_NAME/$LV_NAME"
+
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
           if grep -qs $GLUSTER_MNT /proc/mounts ; then
             umount $GLUSTER_MNT 2>&1
@@ -1168,12 +1176,25 @@ function create_trusted_pool(){
 #
 function brick_dirs_mnt(){
 
-  local out; local node
+  local out; local node; local i; local brick; local mgmt_node
   local BRICK_MNT_OPTS="noatime,inode64"
   local GLUSTER_MNT_OPTS="entry-timeout=0,attribute-timeout=0,use-readdirp=no,acl,_netdev"
 
-  for node in "${HOSTS[@]}" ; do
+  [[ -z "$MGMT_NODE_IN_POOL" ]] && mgmt_node="$MGMT_NODE" # outside of pool
+
+  for (( i=0; i<$NUMNODES; i++ )); do
+      node=${HOSTS[$i]}
       display "On $node:" $LOG_DEBUG
+
+      # set VG/LV names and LV_BRICK based on options and brick-dev
+      [[ -n "$BRICK_DEV" ]] && brick="$BRICK_DEV" || brick="${BRICKS[$i]}"
+      if [[ $LVM == false ]] ; then  # vg/lv are defaults, set to brick
+	LV_NAME="${brick##*/}"
+	VG_NAME="${brick#*dev/}" # "vg/lv"
+	VG_NAME="${VG_NAME%/*}"
+      fi
+      LV_BRICK="/dev/$VG_NAME/$LV_NAME"
+
       # make brick and vol mnt dirs
       # note: must be done before the brick mount
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
@@ -1193,8 +1214,8 @@ function brick_dirs_mnt(){
       # append brick and gluster mounts to fstab
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
 	     if ! grep -qs $BRICK_DIR /etc/fstab ; then
-	       echo '$LV_BRICK $BRICK_DIR xfs  \
-		$BRICK_MNT_OPTS  0 0' >>/etc/fstab
+	       echo '$LV_BRICK $BRICK_DIR xfs \
+		 $BRICK_MNT_OPTS  0 0' >>/etc/fstab
 	     fi
 	     if ! grep -qs $GLUSTER_MNT /etc/fstab ; then
 	       echo '$node:/$VOLNAME  $GLUSTER_MNT  glusterfs \
@@ -1571,7 +1592,16 @@ function install_nodes(){
   #      #
   for (( i=0; i<$NUMNODES; i++ )); do
       node=${HOSTS[$i]}; ip=${HOST_IPS[$i]}
+
+      # set VG/LV names and LV_BRICK based on options and brick-dev
       [[ -n "$BRICK_DEV" ]] && brick="$BRICK_DEV" || brick="${BRICKS[$i]}"
+      if [[ $LVM == false ]] ; then  # vg/lv are defaults, set to brick
+	LV_NAME="${brick##*/}"
+	VG_NAME="${brick#*dev/}" # "vg/lv"
+	VG_NAME="${VG_NAME%/*}"
+      fi
+      LV_BRICK="/dev/$VG_NAME/$LV_NAME"
+
       echo
       display
       display '--------------------------------------------' $LOG_SUMMARY
@@ -1673,18 +1703,12 @@ function perf_config(){
 #
 function reboot_self(){
 
-  local ans='y'
-
   echo "*** Your system ($(hostname -s)) needs to be rebooted to complete the"
   echo "    installation of one or more kernel patches."
-  [[ "$ANS_YES" == 'n' ]] && read -p "    Reboot now? [y|N] " ans
-  case $ans in
-    y|yes|Y|YES|Yes)
-	display "*** REBOOTING self..." $LOG_INFO
-	reboot
-    ;;
-    *)  exit 0
-  esac
+  if [[ "$ANS_YES" == 'n' ]] && yesno "    Reboot now? [y|N] " ; then
+    display "*** REBOOTING self..." $LOG_INFO
+    reboot
+  fi
   echo "No reboot! You must reboot your system prior to running Hadoop jobs."
 }
 
@@ -1704,14 +1728,6 @@ verify_local_deploy_setup
 
 # validate command line options
 check_cmdline
-
-# set VG/LV names an LV_BRICK based on options and brick-dev
-if [[ $LVM == false ]] ; then  # vg/lv names are defaults, set to brick-dev
-  LV_NAME="${BRICK_DEV##*/}"
-  VG_NAME="${BRICK_DEV#*dev/}" # "vg/lv"
-  VG_NAME="${VG_NAME%/*}"
-fi
-LV_BRICK="/dev/$VG_NAME/$LV_NAME"
 
 # convention is to use the volname as the subdir under the brick as the mnt
 BRICK_MNT=$BRICK_DIR/$VOLNAME

@@ -660,6 +660,24 @@ function start_gluster(){
   done
 }
 
+# setup_vg_lv_brick: set the global vars VG_NAME, LV_NAME, and LV_BRICK, if the
+# --lvm option was not specified (which is the default). This is needed when
+# the brick-devs are vg/lv names coming from the local hosts file, rather than
+# being provided as the brick-dev arg to the script.
+# Args: $1=brick-dev-path, expected to be /dev/VG/LV.
+#
+function setup_vg_lv_brick(){
+
+  local lv_dev="$1"
+
+  if [[ $LVM == false ]] ; then  # brick-dev contains /dev/vg/lv
+    LV_NAME="${lv_dev##*/}"
+    VG_NAME="${lv_dev#*dev/}" # "vg/lv"
+    VG_NAME="${VG_NAME%/*}"
+    LV_BRICK="/dev/$VG_NAME/$LV_NAME"
+  fi
+}
+
 # verify_hadoop_gid: check that the gid for the passed-in group is the same on
 # all nodes. Note: the mgmt-node, if outside of the storage pool, needs to be
 # included in the consistency test.
@@ -1043,7 +1061,8 @@ function verify_gluster_mnt(){
 #
 function cleanup(){
 
-  local node; local i; local out; local err; local force=''; local brick
+  local node; local i; local out; local err; local force=''
+  local brick="$BRICK_DEV"
 
   # unconditionally prompt before deleting files and the volume!
   echo
@@ -1112,13 +1131,10 @@ function cleanup(){
   for (( i=0; i<$NUMNODES; i++ )); do
       node=${HOSTS[$i]}
       # set VG/LV names and LV_BRICK based on options and brick-dev
-      [[ -n "$BRICK_DEV" ]] && brick="$BRICK_DEV" || brick="${BRICKS[$i]}"
-      if [[ $LVM == false ]]; then  # vg/lv names are defaults, set to brick
-	LV_NAME="${brick##*/}"
-	VG_NAME="${brick#*dev/}" # "vg/lv"
-	VG_NAME="${VG_NAME%/*}"
+      if [[ -z "$BRICK_DEV" ]] ; then  # brick-dev dynamic per hosts file
+	brick="${BRICKS[$i]}"
+        setup_vg_lv_brick "$brick"
       fi
-      LV_BRICK="/dev/$VG_NAME/$LV_NAME"
 
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
           if grep -qs $GLUSTER_MNT /proc/mounts ; then
@@ -1176,7 +1192,8 @@ function create_trusted_pool(){
 #
 function brick_dirs_mnt(){
 
-  local out; local node; local i; local brick; local mgmt_node
+  local out; local node; local i
+  local brick="$BRICK_DEV"; local mgmt_node
   local BRICK_MNT_OPTS="noatime,inode64"
   local GLUSTER_MNT_OPTS="entry-timeout=0,attribute-timeout=0,use-readdirp=no,acl,_netdev"
 
@@ -1187,13 +1204,10 @@ function brick_dirs_mnt(){
       display "On $node:" $LOG_DEBUG
 
       # set VG/LV names and LV_BRICK based on options and brick-dev
-      [[ -n "$BRICK_DEV" ]] && brick="$BRICK_DEV" || brick="${BRICKS[$i]}"
-      if [[ $LVM == false ]] ; then  # vg/lv are defaults, set to brick
-	LV_NAME="${brick##*/}"
-	VG_NAME="${brick#*dev/}" # "vg/lv"
-	VG_NAME="${VG_NAME%/*}"
+      if [[ -z "$BRICK_DEV" ]] ; then  # brick-dev dynamic per hosts file
+	brick="${BRICKS[$i]}"
+        setup_vg_lv_brick "$brick"
       fi
-      LV_BRICK="/dev/$VG_NAME/$LV_NAME"
 
       # make brick and vol mnt dirs
       # note: must be done before the brick mount
@@ -1506,7 +1520,7 @@ function install_nodes(){
 
   REBOOT_NODES=() # global
   local out; local i; local node; local ip
-  local install_mgmt_node; local brick
+  local install_mgmt_node; local brick="$BRICK_DEV"
   local LOCAL_PREP_LOG_DIR='/var/tmp/'
   # list of files to copy to node, exclude devutils/
   local FILES_TO_CP="$(find ./* -path ./devutils -prune -o -print)"
@@ -1594,13 +1608,10 @@ function install_nodes(){
       node=${HOSTS[$i]}; ip=${HOST_IPS[$i]}
 
       # set VG/LV names and LV_BRICK based on options and brick-dev
-      [[ -n "$BRICK_DEV" ]] && brick="$BRICK_DEV" || brick="${BRICKS[$i]}"
-      if [[ $LVM == false ]] ; then  # vg/lv are defaults, set to brick
-	LV_NAME="${brick##*/}"
-	VG_NAME="${brick#*dev/}" # "vg/lv"
-	VG_NAME="${VG_NAME%/*}"
+      if [[ -z "$BRICK_DEV" ]] ; then  # brick-dev dynamic per hosts file
+	brick="${BRICKS[$i]}"
+        setup_vg_lv_brick "$brick"
       fi
-      LV_BRICK="/dev/$VG_NAME/$LV_NAME"
 
       echo
       display
@@ -1728,6 +1739,14 @@ verify_local_deploy_setup
 
 # validate command line options
 check_cmdline
+
+# set vg/lv names and lv-brick to raw-dev components, based on args
+# note: vg/lv names and lv-brick can change per node in where the hosts file
+#  contains different brick-dev names per node
+if [[ -n "$BRICK_DEV" ]] ; then # brick-dev is static (not in hosts file)
+  setup_vg_lv_brick "$BRICK_DEV"
+fi
+LV_BRICK="/dev/$VG_NAME/$LV_NAME" # may be set later...
 
 # convention is to use the volname as the subdir under the brick as the mnt
 BRICK_MNT=$BRICK_DIR/$VOLNAME

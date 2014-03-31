@@ -674,8 +674,8 @@ function setup_vg_lv_brick(){
     LV_NAME="${lv_dev##*/}"
     VG_NAME="${lv_dev#*dev/}" # "vg/lv"
     VG_NAME="${VG_NAME%/*}"
-    LV_BRICK="/dev/$VG_NAME/$LV_NAME"
   fi
+  LV_BRICK="/dev/$VG_NAME/$LV_NAME"
 }
 
 # verify_hadoop_gid: check that the gid for the passed-in group is the same on
@@ -1044,11 +1044,11 @@ function verify_gluster_mnt(){
 }
 
 # cleanup: do the following steps (order matters), but always prompt for
-# confirmation before removing files under the gluster mount.
+# confirmation before deleting the volume, etc.
 # Note: this function used to be part of the default task flow for preparing
 #   RHS for Hadoop workload; however, now (2014-Mar) it is *only* available
-#   via the undocumented --clean option.
-# 1) delete all files/dirs under volume mount **
+#   via the undocumented --_clean option.
+# 1) re-start glusterd
 # 2) stop vol **
 # 3) delete vol **
 # 4) detach nodes
@@ -1066,14 +1066,14 @@ function cleanup(){
 
   # unconditionally prompt before deleting files and the volume!
   echo
-  echo "The next step is to delete all files under $GLUSTER_MNT/ across the"
-  echo "cluster, and to delete the gluster volume."
-  echo "Answering yes will remove ALL files in the $VOLNAME volume!" 
+  echo "The next step is restart glusterd, stop and delete the gluster volume,"
+  echo "and detach the trusted storage pool."
+  echo "Answering yes will perform these tasks."
   echo
   if ! yesno "Continue? [y|N] " ; then
     exit 0
   fi
-  if ! yesno "Are you 100% certain? This is not reversible! Continue? [y|N] "
+  if ! yesno "Are you 100% certain? Continue? [y|N] "
   then
     exit 0
   fi
@@ -1082,21 +1082,17 @@ function cleanup(){
   display "**Note: gluster \"cleanup\" errors below may be ignored if the $VOLNAME volume" $LOG_INFO
   display "  has not been created or started, etc." $LOG_INFO
 
-  # 0) kill gluster in case there are various gluster processes hangs, then
+  # 1) kill gluster in case there are various gluster processes hangs, then
   #    re-start gluster
   kill_gluster
   start_gluster
 
-  # 1) delete all files/dirs under volume mount (distributed) 
-  #    before tearing down the trusted pool
   # 2) stop vol (distributed)
   # 3) delete vol (distributed)
   display "  -- on node $firstNode (distributed):" $LOG_INFO
-  display "       rm $GLUSTER_MNT/*..."            $LOG_INFO
   display "       stopping $VOLNAME volume..."     $LOG_INFO
   display "       deleting $VOLNAME volume..."     $LOG_INFO
   out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	rm -rf $GLUSTER_MNT/* 2>&1
 	gluster --mode=script volume stop $VOLNAME 2>&1
 	gluster --mode=script volume delete $VOLNAME 2>&1")"
   err=$?
@@ -1745,8 +1741,9 @@ check_cmdline
 #  contains different brick-dev names per node
 if [[ -n "$BRICK_DEV" ]] ; then # brick-dev is static (not in hosts file)
   setup_vg_lv_brick "$BRICK_DEV"
+else # brick-devs (lv or raw) come from hosts file
+  LV_BRICK="/dev/$VG_NAME/$LV_NAME" # may be set later...
 fi
-LV_BRICK="/dev/$VG_NAME/$LV_NAME" # may be set later...
 
 # convention is to use the volname as the subdir under the brick as the mnt
 BRICK_MNT=$BRICK_DIR/$VOLNAME

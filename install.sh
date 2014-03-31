@@ -27,7 +27,7 @@
 initialize_globals(){
 
   SCRIPT=$(basename $0)
-  INSTALL_VER='0.82' # self version
+  INSTALL_VER='0.83' # self version
 
   # flag if we're doing an rhs related install, set before parsing args
   [[ -d glusterfs ]] && RHS_INSTALL=false || RHS_INSTALL=true
@@ -84,6 +84,15 @@ initialize_globals(){
   HOSTS_FILE="$INSTALL_DIR/hosts"
   # number of nodes in hosts file (= trusted pool size)
   NUMNODES=0
+
+  # hadoop users and group(s)
+  HBASE_U='hbase'
+  HCAT_U='hcat'
+  HIVE_U='hive'
+  MAPRED_U='mapred'
+  YARN_U='yarn'
+  # note: all users/owners belong to the hadoop group for now
+  HADOOP_G='hadoop'
 
   # misc
   MGMT_NODE=''
@@ -1363,7 +1372,7 @@ function create_hadoop_users(){
 	  out="$(ssh -oStrictHostKeyChecking=no root@$node "
 	     if ! getent passwd $user >/dev/null ; then
 		echo 'on $node: create users'
-		useradd --system -g $HADOOP_G $user 2>&1
+		useradd --system -g $grp $user 2>&1
 		rc=\$?
 		if (( rc == 0 )) ; then
 		  echo '...success '
@@ -1388,18 +1397,12 @@ function create_hadoop_dirs(){
 
   local i; local out; local dir; local owner; local perm
 
-  local YARN_NM_REMOTE_APP_LOG_DIR='tmp/logs'
-  local MR_JOB_HIST_INTERMEDIATE_DONE='mr-history/tmp'
-  local MR_JOB_HIST_DONE='mr-history/done'
-  local YARN_STAGE='job-staging-yarn'
-  local MR_JOB_HIST_APPS_LOGS='app-logs'
-
   # the next 3 arrays are all paired
   # note: if a dirname is relative (doesn't start with '/') then the gluster
   #  mount is prepended to it
-  local MR_DIRS=("$GLUSTER_MNT" 'mapred' 'mapred/system' 'tmp' 'user' 'mr-history' "$YARN_NM_REMOTE_APP_LOG_DIR" "$MR_JOB_HIST_INTERMEDIATE_DONE" "$MR_JOB_HIST_DONE" "$YARN_STAGE" "$MR_JOB_HIST_APPS_LOGS" 'hbase')
-  local MR_PERMS=(0775 0770 0755 1777 0775 0755 1777 1777 0770 0770 1777 0770)
-  local MR_OWNERS=("$YARN_U" "$MAPRED_U" "$MAPRED_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$HBASE_U")
+  local MR_DIRS=("$GLUSTER_MNT" 'mapred' 'mapred/system' 'tmp' 'user' 'mr-history' 'tmp/logs' 'mr-history/tmp' 'mr-history/done' 'job-staging-yarn' 'app-logs' 'hbase' 'apps' 'apps/webhcat')
+  local MR_PERMS=(0775 0770 0755 1777 0775 0755 1777 1777 0770 0770 1777 0770 0775 0775)
+  local MR_OWNERS=("$YARN_U" "$MAPRED_U" "$MAPRED_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$YARN_U" "$HBASE_U" "$HIVE_U" "$HCAT_U")
 
   # create all of the M/R-YARN dirs with correct perms and owner
   for (( i=0 ; i<${#MR_DIRS[@]} ; i++ )) ; do
@@ -1448,12 +1451,7 @@ function setup(){
   local out; local err; local force=''
   local bricks=''
   local dir; local perm; local owner; local uid
-  local HBASE_U='hbase'
-  local YARN_U='yarn'; local YARN_UID=502
-  # note: all users/owners belong to the hadoop group for now
-  local HADOOP_G='hadoop'
-  local MAPRED_U='mapred'
-  local MR_USERS=("$MAPRED_U" "$YARN_U" "$HBASE_U")
+  local MR_USERS=("$MAPRED_U" "$YARN_U" "$HBASE_U" "$HCAT_U" "$HIVE_U")
 
   if (( DO_SETUP_BRICKS )) ; then
     # 1) mkdir brick_dir on every node

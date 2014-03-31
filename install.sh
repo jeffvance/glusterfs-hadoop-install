@@ -23,6 +23,7 @@
 
 
 # initialize_globals: set all globals vars to their initial/default value.
+#
 initialize_globals(){
 
   SCRIPT=$(basename $0)
@@ -91,6 +92,39 @@ initialize_globals(){
 
   # source constants and functions common to other scripts
   source $INSTALL_DIR/functions
+}
+
+# init_dynamic_globals: after the command line and the local hosts file have
+# been parsed and validate, set global variables that are a function of the
+# command args and the hosts file content.
+#
+function init_dynamic_globals(){
+
+  # set vg/lv names and lv-brick to raw-dev components, based on args
+  # note: vg/lv names and lv-brick can change per node in where the hosts file
+  #  contains different brick-dev names per node
+  if [[ -n "$BRICK_DEV" ]] ; then # brick-dev is static (not in hosts file)
+    setup_vg_lv_brick "$BRICK_DEV"
+  else # brick-devs (lv or raw) come from hosts file
+    LV_BRICK="/dev/$VG_NAME/$LV_NAME" # may be set later...
+  fi
+
+  # convention is to use the volname as the subdir under the brick as the mnt
+  BRICK_MNT=$BRICK_DIR/$VOLNAME
+  MAPRED_SCRATCH_DIR="$BRICK_DIR/mapredlocal" # xfs but not distributed
+  firstNode=${HOSTS[0]}
+
+  # set DO_xxx globals based on DO_BITS
+  ((DO_REPORT=(DO_BITS>>REPORT_BIT) % 2)) # 1 --> do it
+  ((DO_PREP=(DO_BITS>>PREP_BIT) % 2))
+  ((DO_CLEAN=(DO_BITS>>CLEAN_BIT) % 2))
+  ((DO_SETUP=(DO_BITS>>SETUP_BIT) % 2)) # 0 --> defeats all setup tasks
+  ((DO_SETUP_BRICKS=(DO_BITS>>SETUP_BRICKS_BIT) % 2))
+  ((DO_SETUP_VOL=(DO_BITS>>SETUP_VOL_BIT) % 2))
+  ((DO_SETUP_USERS=(DO_BITS>>SETUP_USERS_BIT) % 2))
+  ((DO_SETUP_HDIRS=(DO_BITS>>SETUP_HDIRS_BIT) % 2))
+  ((DO_PERF=(DO_BITS>>PERF_BIT) % 2))
+  ((DO_VALIDATE=(DO_BITS>>VALIDATE_BIT) % 2))
 }
 
 # yesno: prompts $1 to stdin and returns 0 if user answers yes, else returns 1.
@@ -370,7 +404,7 @@ function parse_cmd(){
 #
 function check_cmdline(){
 
-  local RAW_BLOCK_DEV_RE='/dev/[sv]d[a-z]*[0-9]*$'
+  local RAW_BLOCK_DEV_RE='/dev/[msv]d[a-z]*[0-9]*$'
 
   # validate replica cnt for RHS
   if (( REPLICA_CNT != 2 )) ; then
@@ -389,8 +423,9 @@ function check_cmdline(){
     exit -1
   fi
 
-  # lvm checks
-  if [[ "$LVM" == false ]] ; then
+  # lvm checks -- note that when the brick-dev is supplied in the hosts file
+  # then each brick-dev is validated separately in prep_node.sh.
+  if [[ $LVM == false ]] ; then # brick-dev is expected to be /dev/vg/lv
     if [[ "$VG_NAME" != "$VG_DEFAULT" || "$LV_NAME" != "$LV_DEFAULT" ]]; then
       echo "ERROR: cannot use --vgname and/or --lvname without also specifying --lvm"
       exit -1
@@ -1736,31 +1771,8 @@ verify_local_deploy_setup
 # validate command line options
 check_cmdline
 
-# set vg/lv names and lv-brick to raw-dev components, based on args
-# note: vg/lv names and lv-brick can change per node in where the hosts file
-#  contains different brick-dev names per node
-if [[ -n "$BRICK_DEV" ]] ; then # brick-dev is static (not in hosts file)
-  setup_vg_lv_brick "$BRICK_DEV"
-else # brick-devs (lv or raw) come from hosts file
-  LV_BRICK="/dev/$VG_NAME/$LV_NAME" # may be set later...
-fi
-
-# convention is to use the volname as the subdir under the brick as the mnt
-BRICK_MNT=$BRICK_DIR/$VOLNAME
-MAPRED_SCRATCH_DIR="$BRICK_DIR/mapredlocal" # xfs but not distributed
-firstNode=${HOSTS[0]}
-
-# set DO_xxx globals based on DO_BITS
-((DO_REPORT=(DO_BITS>>REPORT_BIT) % 2)) # 1 --> do it
-((DO_PREP=(DO_BITS>>PREP_BIT) % 2))
-((DO_CLEAN=(DO_BITS>>CLEAN_BIT) % 2))
-((DO_SETUP=(DO_BITS>>SETUP_BIT) % 2)) # 0 --> defeats all setup tasks
-((DO_SETUP_BRICKS=(DO_BITS>>SETUP_BRICKS_BIT) % 2))
-((DO_SETUP_VOL=(DO_BITS>>SETUP_VOL_BIT) % 2))
-((DO_SETUP_USERS=(DO_BITS>>SETUP_USERS_BIT) % 2))
-((DO_SETUP_HDIRS=(DO_BITS>>SETUP_HDIRS_BIT) % 2))
-((DO_PERF=(DO_BITS>>PERF_BIT) % 2))
-((DO_VALIDATE=(DO_BITS>>VALIDATE_BIT) % 2))
+# set globals that are based on command line args and hosts file content
+init_dynamic_globals
 
 ## start tasks: ##
 (( DO_REPORT )) && report_deploy_values

@@ -414,7 +414,7 @@ function check_cmdline(){
 
   # since a brick-dev is optional in the local hosts file, verify that we
   # either have a brick-dev cmdline arg, or we have bricks in the hosts file,
-  #J but not both
+  # but not both
   if [[ -z "$BRICK_DEV" && ${#BRICKS} == 0 ]] ; then
     echo -e "ERROR: a brick device path is required either as an arg to $SCRIPT or in\nthe local $HOSTS_FILE hosts file"
     exit -1
@@ -423,20 +423,23 @@ function check_cmdline(){
     exit -1
   fi
 
-  # lvm checks -- note that when the brick-dev is supplied in the hosts file
-  # then each brick-dev is validated separately in prep_node.sh.
-  if [[ $LVM == false ]] ; then # brick-dev is expected to be /dev/vg/lv
-    if [[ "$VG_NAME" != "$VG_DEFAULT" || "$LV_NAME" != "$LV_DEFAULT" ]]; then
-      echo "ERROR: cannot use --vgname and/or --lvname without also specifying --lvm"
+  # lvm checks
+  # note: when the brick-dev is supplied in the hosts file then each brick-dev
+  #   is validated separately in prep_node.sh.
+  if [[ -n "$BRICK_DEV" ]] ; then # brick-dev supplied as cmdline arg
+    if [[ $LVM == false ]] ; then # brick-dev is expected to be /dev/vg/lv
+      if [[ "$VG_NAME" != "$VG_DEFAULT" || "$LV_NAME" != "$LV_DEFAULT" ]]; then
+	echo "ERROR: cannot use --vgname and/or --lvname without also specifying --lvm"
+	exit -1
+      fi
+      if [[ "$BRICK_DEV" =~ $RAW_BLOCK_DEV_RE ]] ; then
+	echo "ERROR: expect a logical volume (LV) brick path, e.g. /dev/VG/LV"
+	exit -1
+      fi
+    elif [[ ! "$BRICK_DEV" =~ $RAW_BLOCK_DEV_RE ]] ; then # LVM==true
+      echo "ERROR: expect a raw block brick device path, e.g. /dev/sdb"
       exit -1
     fi
-    if [[ "$BRICK_DEV" =~ $RAW_BLOCK_DEV_RE ]] ; then
-      echo "ERROR: expect a logical volume (LV) brick path, e.g. /dev/VG/LV"
-      exit -1
-    fi
-  elif [[ ! "$BRICK_DEV" =~ $RAW_BLOCK_DEV_RE ]] ; then
-    echo "ERROR: expect a raw block brick device path, e.g. /dev/sdb"
-    exit -1
   fi
 }
 

@@ -27,7 +27,7 @@
 initialize_globals(){
 
   SCRIPT=$(basename $0)
-  INSTALL_VER='0.84' # self version
+  INSTALL_VER='0.85' # self version
 
   # flag if we're doing an rhs related install, set before parsing args
   [[ -d glusterfs ]] && RHS_INSTALL=false || RHS_INSTALL=true
@@ -1709,7 +1709,7 @@ function reboot_nodes(){
   done
 }
 
-# perf_config: assign the non-default gluster volume attributes below. If the'
+# perf_config: assign the non-default gluster volume attributes below. If the
 # gluster perf settings fail (could be due to a slow cluster) then repeat until
 # success or a certain number of attempts have been made.
 #
@@ -1717,20 +1717,20 @@ function perf_config(){
 
   local out; local i=0; local SLEEP=5; local LIMIT=$((NUMNODES * 2))
   local LAST_N=3 # tail records containing vol settings (vol info cmd)
-  local PREFETCH_K='performance.stat-prefetch'
-  local EAGERLOCK_K='cluster.eager-lock'
-  local QUICKREAD_K='performance.quick-read'
+  local PREFETCH='performance.stat-prefetch'
+  local EAGERLOCK='cluster.eager-lock'
+  local QUICKREAD='performance.quick-read'
   local k; local v; local setting; local errcnt
   # set assoc array to desired values for the perf config keys
-  declare -A settings=([$PREFETCH_K]='off' \
-		       [$EAGERLOCK_K]='on' \
-		       [$QUICKREAD_K]='off')
+  declare -A settings=([$PREFETCH]='off' \
+		       [$EAGERLOCK]='on' \
+		       [$QUICKREAD]='off')
 
   out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	gluster vol set $VOLNAME $QUICKREAD_K ${settings[$QUICKREAD_K]} 2>&1
-	gluster vol set $VOLNAME $EAGERLOCK_K ${settings[$EAGERLOCK_K]} 2>&1
-	gluster vol set $VOLNAME $PREFETCH_K  ${settings[$PREFETCH_K]}  2>&1")"
-  display "gluster vol set out: $out" $LOG_DEBUG
+	gluster vol set $VOLNAME $QUICKREAD ${settings[$QUICKREAD]} 2>&1
+	gluster vol set $VOLNAME $EAGERLOCK ${settings[$EAGERLOCK]} 2>&1
+	gluster vol set $VOLNAME $PREFETCH  ${settings[$PREFETCH]}  2>&1")"
+  display "gluster volume set: $out" $LOG_DEBUG
 
   while (( i < LIMIT )) ; do # don't loop forever
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "

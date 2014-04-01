@@ -1715,8 +1715,7 @@ function reboot_nodes(){
 #
 function perf_config(){
 
-  local err; local out
-  local i=0; local SLEEP=5; local LIMIT=$((NUMNODES * 2))
+  local out; local i=0; local SLEEP=5; local LIMIT=$((NUMNODES * 2))
   local LAST_N=3 # tail records containing vol settings (vol info cmd)
   local PREFETCH_K='performance.stat-prefetch'
   local EAGERLOCK_K='cluster.eager-lock'
@@ -1731,12 +1730,12 @@ function perf_config(){
 	gluster vol set $VOLNAME $QUICKREAD_K ${settings[$QUICKREAD_K]} 2>&1
 	gluster vol set $VOLNAME $EAGERLOCK_K ${settings[$EAGERLOCK_K]} 2>&1
 	gluster vol set $VOLNAME $PREFETCH_K  ${settings[$PREFETCH_K]}  2>&1")"
+  display "gluster vol set out: $out" $LOG_DEBUG
 
   while (( i < LIMIT )) ; do # don't loop forever
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
 	    gluster volume info $VOLNAME | tail -n $LAST_N")"
-      err=$?
-      if (( err == 0 )) ; then
+      if (( $? == 0 )) ; then
 	out=($(echo ${out//: /:}))
 	errcnt=0
 	for setting in ${out[@]} ; do # "perf-key:value" list

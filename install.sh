@@ -171,10 +171,9 @@ Syntax:
 
 $SCRIPT [-v|--version] | [-h|--help]
 
-$SCRIPT [--vgname <name>]    [--lvname <name>]
-           [--vgname <name>]    [--lvname <name>]    [--lvm]
-           [--brick-mnt <path>] [--vol-name <name>]  [--vol-mnt <path>]
+$SCRIPT [--brick-mnt <path>] [--vol-name <name>]  [--vol-mnt <path>]
            [--replica <num>]    [--hosts <path>]     [--mgmt-node <node>]
+           [--vg-name <name>]   [--lv-name <name>]   [--lvm]
            [--logfile <path>]   [-y]
            [--verbose [num] ]   [-q|--quiet]         [--debug]
            [brick-dev]
@@ -214,16 +213,6 @@ EOF
                        may be included in the local "hosts" file, per node. If 
                        specified on the command line then the same brick-dev
                        applies to all nodes.
-  --lvm              : create a simple LVM setup based on the raw brick-dev, and
-                       the passed-in or default VG and LV names. Default is to
-                       not create a logical volume from the brick-dev, in which
-                       case the --vgname and --lvname options are ignored.
-  --vgname    <name> : Ignored unless --lvm specified. Volume group name where
-                       the raw block brick-dev will be added. Can be an existing
-                       VG or a new VG will be created. Default: "RHS_vg1".
-  --lvname    <name> : Ignored unless --lvm specified. Logical Volume name. Can
-                       be an existing LV created from the VG, or a new LV will
-                       be created. Default: "RHS_lv1".
   --brick_mnt <path> : Brick directory. Default: "/mnt/brick1/<volname>".
   --vol-name  <name> : Gluster volume name. Default: "HadoopVol".
   --vol-mnt   <path> : Gluster mount point. Default: "/mnt/glusterfs".
@@ -234,6 +223,16 @@ EOF
                        Default: "./hosts".
   --mgmt-node <node> : hostname of the node to be used as the management node.
                        Default: the first node appearing in the "hosts" file.
+  --lvm              : create a simple LVM setup based on the raw brick-dev, and
+                       the passed-in or default VG and LV names. Default is to
+                       not create a logical volume from the brick-dev, in which
+                       case the --vg-name and --lv-name options are ignored.
+  --vg-name   <name> : Ignored unless --lvm specified. Volume group name where
+                       the raw block brick-dev will be added. Can be an existing
+                       VG or a new VG will be created. Default: "RHS_vg1".
+  --lv-name   <name> : Ignored unless --lvm specified. Logical Volume name. Can
+                       be an existing LV created from the VG, or a new LV will
+                       be created. Default: "RHS_lv1".
   --logfile   <path> : logfile name. Default is /var/log/rhs-hadoo-install.log.
                        brick-dev. Default: no logical volume is created.
   -y                 : suppress prompts and auto-answer "yes". Default is to
@@ -262,7 +261,7 @@ EOF
 function parse_cmd(){
 
   local OPTIONS='vhqy'
-  local LONG_OPTS='vgname:,lvname:,brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,help,version,quiet,debug,_prep,_clean,_setup,_brick-dirs,lvm,_vol,_hadoop-dirs,_users,_perf,_validate'
+  local LONG_OPTS='vg-name:,lv-name:,brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,help,version,quiet,debug,_prep,_clean,_setup,_brick-dirs,lvm,_vol,_hadoop-dirs,_users,_perf,_validate'
   local task_opt_seen=false
 
   # note: $? *not* set for invalid option errors!
@@ -278,10 +277,10 @@ function parse_cmd(){
 	-v|--version)
 	    echo "$SCRIPT version: $INSTALL_VER"; exit 0
 	;;
-	--vgname)
+	--vg-name)
 	    VG_NAME=$2; shift 2; continue
 	;;
-	--lvname)
+	--lv-name)
 	    LV_NAME=$2; shift 2; continue
 	;;
         --lvm)
@@ -438,7 +437,7 @@ function check_cmdline(){
   if [[ -n "$BRICK_DEV" ]] ; then # brick-dev supplied as cmdline arg
     if [[ $LVM == false ]] ; then # brick-dev is expected to be /dev/vg/lv
       if [[ "$VG_NAME" != "$VG_DEFAULT" || "$LV_NAME" != "$LV_DEFAULT" ]]; then
-	echo "ERROR: cannot use --vgname and/or --lvname without also specifying --lvm"
+	echo "ERROR: cannot use --vg-name and/or --lv-name without also specifying --lvm"
 	exit -1
       fi
       if [[ "$BRICK_DEV" =~ $RAW_BLOCK_DEV_RE ]] ; then

@@ -27,7 +27,7 @@
 initialize_globals(){
 
   SCRIPT=$(basename $0)
-  INSTALL_VER='0.83' # self version
+  INSTALL_VER='0.84' # self version
 
   # flag if we're doing an rhs related install, set before parsing args
   [[ -d glusterfs ]] && RHS_INSTALL=false || RHS_INSTALL=true
@@ -1716,26 +1716,49 @@ function reboot_nodes(){
 function perf_config(){
 
   local err; local out
-  local i=0; local SLEEP=5; local LIMIT=$((NUMNODES * 1))
+  local i=0; local SLEEP=5; local LIMIT=$((NUMNODES * 2))
+  local LAST_N=3 # tail records containing vol settings (vol info cmd)
+  local PREFETCH_K='performance.stat-prefetch'
+  local EAGERLOCK_K='cluster.eager-lock'
+  local QUICKREAD_K='performance.quick-read'
+  local k; local v; local setting; local errcnt
+  # set assoc array to desired values for the perf config keys
+  declare -A settings=([$PREFETCH_K]='off' \
+		       [$EAGERLOCK_K]='on' \
+		       [$QUICKREAD_K]='off')
 
-  while true ; do # break on success or final failure...
+  out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+	gluster vol set $VOLNAME $QUICKREAD_K ${settings[$QUICKREAD_K]} 2>&1
+	gluster vol set $VOLNAME $EAGERLOCK_K ${settings[$EAGERLOCK_K]} 2>&1
+	gluster vol set $VOLNAME $PREFETCH_K  ${settings[$PREFETCH_K]}  2>&1")"
+
+  while (( i < LIMIT )) ; do # don't loop forever
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	gluster volume set $VOLNAME quick-read off 2>&1
-	gluster volume set $VOLNAME cluster.eager-lock on 2>&1
-	gluster volume set $VOLNAME performance.stat-prefetch off 2>&1")"
+	    gluster volume info $VOLNAME | tail -n $LAST_N")"
       err=$?
-      (( err == 0 )) && break # done, success
-      display "WARN $err: gluster perf: $out" $LOG_DEBUG
-      (( i >= LIMIT )) && break # done, failed
+      if (( err == 0 )) ; then
+	out=($(echo ${out//: /:}))
+	errcnt=0
+	for setting in ${out[@]} ; do # "perf-key:value" list
+	    k=${setting%:*} # strip off the value part
+	    v=${setting#*:} # strip off the key part
+	    if [[ "$v" != "${settings[$k]}" ]] ; then
+	      display "WARN: $k not yet set..." $LOG_DEBUG
+	      ((errcnt++))
+	      break # for loop
+	    fi
+	done
+	(( errcnt == 0 )) && break # while loop
+      fi
       sleep $SLEEP
       ((i++))
       display "...verify gluster perf wait: $((i*SLEEP)) seconds" $LOG_DEBUG
   done
 
   if (( i < LIMIT )) ; then 
-    display "   gluster perf: $out" $LOG_INFO
+    display "   $VOLNAME volume performance set" $LOG_INFO
   else
-    display "ERROR: gluster perf: $out" $LOG_FORCE
+    display "ERROR: $VOLNAME volume performance not set" $LOG_FORCE
   fi
 }
 

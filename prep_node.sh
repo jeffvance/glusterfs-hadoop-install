@@ -16,7 +16,6 @@
 #  - ensures that ntp is running correctly,
 #  - disables the firewall,
 #  - (optionally) creates a PV, VG, LV based on the brick-dev and LV/VG-names,
-#  - creates an XFS file system on the LV-device path,
 #  - installs the gluster-hadoop plugin, if present in any of the sub-
 #    directories from which install.sh is run.
 #
@@ -206,23 +205,6 @@ function disable_firewall(){
   display "chkconfig off: $out" $LOG_DEBUG
 }
 
-# setup_xfs: mkfs.xfs on the brick device. Arg 1=LV-device-path
-#
-function setup_xfs(){
-
-  local LV=$1
-  local out; local err
-
-  # mkfs.xfs
-  out="$(mkfs -t xfs -i size=512 -f $LV 2>&1)"
-  err=$?
-  display "   mkfs.xfs out: $out" $LOG_DEBUG
-  if (( err != 0 )) ; then
-    display "ERROR: mkfs.xfs on $LV: $out" $LOG_FORCE
-    exit 13
-  fi
-}
-
 # create_pv: initialize a physical volume for use by LVM based on the passed-in
 # device path. Arg: 1=physical volume
 #
@@ -354,9 +336,6 @@ function install_storage(){
     fi
     exit 23
   fi
-
-  # xfs
-  setup_xfs $LV_BRICK
 
   # install glusterfs-hadoop plugin, if provided in the package.
   install_plugin

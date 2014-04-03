@@ -96,6 +96,7 @@ initialize_globals(){
 
   # misc
   MGMT_NODE=''
+  REBOOT_NODES=()
   VERBOSE=$LOG_SUMMARY
   ANS_YES='n' # for -y option
 
@@ -706,6 +707,49 @@ function start_gluster(){
   done
 }
 
+# glusterd_busy: return 0 is there is a transaction in progress or staging 
+# failed, else return 1.
+# Args 1=errno from previous cmd; 2=error msg from previous gluster cmd.
+#
+function glusterd_busy(){
+
+  local err=$1; local msg="$2"
+  local SSH_DELAY=146
+  local TRANS_IN_PROGRESS='Another transaction is in progress'
+  local STAGING_FAILED='Staging failed on'
+
+  (( err == SSH_DELAY )) && return 0 # true
+echo "********busy msg=$msg"
+  grep -qs -E "$TRANS_IN_PROGRESS|$STAGING_FAILED" <<<"$msg"
+}
+
+# wait_for_glusterd: execute gluster vol status on the first node and check
+# the command status. If there is a transaction in progress or the staging
+# failed then sleep some and try again. The loop stops when glusterd has
+# processed the previous transaction.
+# Returns the number of times -1 that the loop was executed, 0..n, with 0
+# meaning there was not a stalled transaction.
+#
+function wait_for_glusterd(){
+
+  local i=1; local err; local out; local SLEEP=5
+
+  while true ; do # until an earlier transaction has completed...
+      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+	    gluster volume status $VOLNAME 2>&1")"
+      err=$?
+      if ! glusterd_busy $err "$out" ; then
+	break # not above errors so exit loop
+      fi
+      sleep $SLEEP
+     ((i++))
+     display "...cluster slow, waiting $((i*SLEEP)) seconds" $LOG_DEBUG
+  done
+
+  ((i--))
+  return $i
+}
+
 # setup_vg_lv_brick: set the global vars VG_NAME, LV_NAME, and LV_BRICK, if the
 # --lvm option was not specified (which is the default). This is needed when
 # the brick-devs are vg/lv names coming from the local hosts file, rather than
@@ -798,74 +842,60 @@ function verify_user_uids(){
 
   (( errcnt > 0 )) &&  { 
 	display "See $LOGFILE for more info on above error(s)"  $LOG_FORCE;
-	exit 12; }
+	exit 11; }
 }
 
-# fix_vol_stop_delete: re-kill gluster using -9, rm current state in
-# /var/lib/glusterd/*, and use the force option to re-attempt to stop/delete
-# the volume. Note: glusterfs log files are not deleted.
+# verify_vol_stopped: there are timing windows when using ssh and the gluster
+# cli. This function returns once it has confirmed that the volume has been
+# stopped, or a predefined number of attempts have been made.
 #
-function fix_vol_stop_delete(){
+function verify_vol_stopped(){
 
-  local out; local node
-  local GLUSTERD_FILES='/var/lib/glusterd/*'
+  local out; local i=0; local SLEEP=5; local LIMIT=$((NUMNODES * 2))
+  local EXPCT_VOL_STATUS_ERR="Volume $VOLNAME is not started"
+  local EXPCT_VOL_DEL_ERR="Volume $VOLNAME does not exist"
 
-  display "attempting to fix vol stop/delete error..." $LOG_DEBUG
-
-  # delete current gluster state using sledge hammer approach
-  display "   re-starting gluster, deleting current state..." $LOG_DEBUG
-  for node in "${HOSTS[@]}"; do
-      out="$(ssh -oStrictHostKeyChecking=no root@$node "
-	rm -rf $GLUSTERD_FILES 2>&1
-	killall -9 -r gluster 2>&1
- 	sleep 1
-	service glusterd start 2>&1")"
+  while (( i < LIMIT )) ; do # don't loop forever
+      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+	    gluster volume status $VOLNAME" 2>&1)"
+      if grep -qs -E "$EXPCT_VOL_STATUS_ERR|$EXPCT_VOL_DEL_ERR" <<<$out; then
+	break
+      fi
+      sleep $SLEEP 
+      ((i++))
+      display "...verify vol stop wait: $((i*SLEEP)) seconds" $LOG_DEBUG
   done
-  
-  display "   re-trying vol stop/delete..." $LOG_DEBUG
-  out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	gluster --mode=script volume stop $VOLNAME force 2>&1
-        sleep 2
-	gluster --mode=script volume delete $VOLNAME 2>&1")"
-  sleep 2
+
+  if (( i < LIMIT )) ; then 
+    display "   Volume stopped..." $LOG_INFO
+  else
+    display "   ERROR: Volume not stopped..." $LOG_FORCE
+    exit 12
+  fi
 }
 
-# verify_vol_stop_delete: there are timing windows when using ssh and the
+# verify_vol_deleted: there are timing windows when using ssh and the
 # gluster cli. This function returns once it has confirmed that the volume has
-# been stopped and deleted successfully, or a predefined number of attempts
-# have been made. An attempt is made to correct a stop/delete failure.
-# Args:
-#   1=exit code from gluster stop/delete commands,
-#   2=error output from gluster cli
+# been deleted, or a predefined number of attempts have been made.
 #
-function verify_vol_stop_delete(){
+function verify_vol_deleted(){
 
-  local stop_del_err=$1; local errmsg="$2"
   local out; local i=0; local SLEEP=5; local LIMIT=$((NUMNODES * 2))
   local EXPCT_VOL_STATUS_ERR="Volume $VOLNAME does not exist"
-  local STAGING_FAILED='Staging failed on '
 
-  if (( stop_del_err != 0 )) && \
-      grep -qs "$STAGING_FAILED" <<<$errmsg ; then
-    # unexpected vol stop/del output so kill gluster processes, restart
-    # glusterd, and re-try the vol stop/delete
-    fix_vol_stop_delete
-  fi
-
-  # verify stop/delete
   while (( i < LIMIT )) ; do # don't loop forever
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
 	    gluster volume status $VOLNAME" 2>&1)"
       [[ $? == 1 && "$out" == "$EXPCT_VOL_STATUS_ERR" ]] && break
       sleep $SLEEP 
       ((i++))
-      display "...verify vol stop/delete wait: $((i*SLEEP)) seconds" $LOG_DEBUG
+      display "...verify vol delete wait: $((i*SLEEP)) seconds" $LOG_DEBUG
   done
 
   if (( i < LIMIT )) ; then 
-    display "   Volume stopped/deleted..." $LOG_INFO
+    display "   Volume deleted..." $LOG_INFO
   else
-    display "   ERROR: Volume not stopped/deleted..." $LOG_FORCE
+    display "   ERROR: Volume not deleted..." $LOG_FORCE
     exit 13
   fi
 }
@@ -952,13 +982,22 @@ function verify_pool_created(){
 function verify_vol_created(){
 
   local volCreateErr=$1; local bricks="$2"
-  local i=0; local out; local SLEEP=5; local LIMIT=$((NUMNODES * 5))
-  local VOL_CREATED='Created'
+  local err; local i=0; local out; local SLEEP=5; local LIMIT=$((NUMNODES * 3))
+  local VOL_CREATED='Created'; local VOL_STARTED='Started'
 
   while (( i < LIMIT )) ; do # don't loop forever
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	gluster volume info $VOLNAME | grep Status:")"
-      [[ $? == 0 && ${out#* } == "$VOL_CREATED" ]] && break # status=created
+	gluster volume info $VOLNAME >volinfo.out 2>&1
+	if (( \$? == 0 )) ; then
+	  grep Status: volinfo.out; exit 0
+	else
+	  exit 1
+	fi")"
+	err=$?
+echo "********** verify create: err=$err, out=$out"
+      if (( err == 0 )) && grep -qs -E "$VOL_CREATED|$VOL_STARTED" <<<$out; then
+ 	break
+      fi
       sleep $SLEEP
       ((i++))
       display "...verify vol create wait: $((i*SLEEP)) seconds" $LOG_DEBUG
@@ -974,80 +1013,28 @@ function verify_vol_created(){
 }
 
 # verify_vol_started: there are timing windows when using ssh and the gluster
-# cli. This function is expected to be called in a loop and thus it can return
-# even when the volume is not started. Examples of this include a previous
-# transaction (presumably the vol create) is still in progress, and since the
-# cli doesn't queue the vol start, the vol start has to be re-executed. It is
-# also possible to get a "vol not started" error (from the vol status cmd)
-# which just means that the vol start has to be re-tried. If the max number
-# of attempts have been made (the "last" arg == true) and if the vol is still
-# not started this function exits with an error. A volume is considered started
-# once all bricks are online, though another way to detect this could be to
-# check the "Status:" value of the vol info command.
-# Args:
-#   $1=true/false if this is the last attempt
-#   $2=exit return from gluster vol start command.
+# cli. This function returns once it has confirmed that the volume has started,
+# or a predefined number of attempts have been made.
 #
 function verify_vol_started(){
 
-  local last=$1; local volStartErr=$2
-  local err_warn='WARN'; local rtn=0
-  local i=0; local out; local SLEEP=5; local LIMIT=$((NUMNODES * 2))
-  local FILTER='^Online' # grep filter
-  local ONLINE=': Y'     # grep not-match value
-  local TRANS_IN_PROGRESS='Another transaction is in progress'
-  local VOL_NOT_STARTED="Volume $VOLNAME is not started"
-  local STAGING_FAILED='Staging failed on'
-
-  while true ; do # until an earlier transaction has completed...
-      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	    gluster volume status $VOLNAME 2>&1")"
-      if grep -qs "$VOL_NOT_STARTED" <<<$out; then
-	i=1 # force return and re-try vol start
-	break
-      fi
-      # check if staging error or transaction-in-progress error
-      if ! grep -qs -E "$TRANS_IN_PROGRESS|$STAGING_FAILED" <<<$out; then
-	break # not above errors so exit loop
-      fi
-      sleep $SLEEP
-     ((i++))
-     display "...cluster slow, waiting to re-try start: $((i*SLEEP)) seconds" \
-	$LOG_DEBUG
-  done
-  if [[ $i > 0 && $last == false ]] ; then
-    # previous transaction was in progress, retry start
-    display "   re-trying volume start..." $LOG_DEBUG
-    return 1
-  fi
+  local out; local i=0; local SLEEP=5; local LIMIT=$((NUMNODES * 2))
 
   while (( i < LIMIT )) ; do # don't loop forever
-      # grep for Online status != Y
-      # note: need to use scratch file rather than a variable since the
-      #  variable's content gets flattened (no newlines) and thus the grep -v
-      #  won't find a node not online, unless they're all offline.
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	    gluster volume status $VOLNAME detail >vol_status.out 2>&1
-	    if (( \$? == 0 )) ; then
-	      grep $FILTER <vol_status.out | grep -v '$ONLINE' | wc -l
-            else
-              echo 'vol status error'
- 	    fi")"
-      [[ "$out" == 0 ]] && break # exit loop
-      sleep $SLEEP
+	    gluster volume status $VOLNAME" 2>&1)"
+      (( $? == 0 )) && break
+      sleep $SLEEP 
       ((i++))
       display "...verify vol start wait: $((i*SLEEP)) seconds" $LOG_DEBUG
   done
 
   if (( i < LIMIT )) ; then 
-    display "   Volume \"$VOLNAME\" started..." $LOG_INFO
+    display "   Volume started..." $LOG_INFO
   else
-    [[ $last == true ]] && err_warn='ERROR'
-    display "   $err_warn: Volume \"$VOLNAME\" start failed with error $volStartErr" $LOG_FORCE
-    [[ $last == true ]] && exit 24
-    rtn=1
+    display "   ERROR: Volume not started..." $LOG_FORCE
+    exit 24
   fi
-  return $rtn
 }
 
 # verify_umounts: given the passed in node, verify that the glusterfs and
@@ -1089,6 +1076,48 @@ function verify_gluster_mnt(){
   fi
 }
 
+# stop_volume: stop the volume and verify that it did stop. Also, handles slow
+# clusters in a loop calling wait_for_clusterd.
+#
+function stop_volume(){
+
+  local out; local err
+
+  while true ; do
+     out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+	   gluster --mode=script volume stop $VOLNAME 2>&1")"
+      err=$?
+      display "gluster vol stop(err=$err): $out" $LOG_DEBUG
+      (( err == 0 )) && break # vol stop worked, exit loop
+      if ! glusterd_busy $err "$out" ; then
+	break # an error other than a transaction in progress...
+      fi
+      wait_for_glusterd
+  done
+  verify_vol_stopped
+}
+
+# delete_volume: sdelete the volume and verify that it was deleted. Also,
+# handles slow clusters in a loop calling wait_for_clusterd.
+#
+function delete_volume(){
+
+  local out; local err
+
+  while true ; do
+      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+	    gluster --mode=script volume delete $VOLNAME 2>&1")"
+      err=$?
+      display "gluster vol delete(err=$err): $out" $LOG_DEBUG
+      (( err == 0 )) && break # vol delete worked, exit loop
+      if ! glusterd_busy $err "$out" ; then
+	break # an error other than a transaction in progress...
+      fi
+      wait_for_glusterd
+  done
+  verify_vol_deleted
+}
+
 # cleanup: do the following steps (order matters), but always prompt for
 # confirmation before deleting the volume, etc.
 # Note: this function used to be part of the default task flow for preparing
@@ -1101,13 +1130,13 @@ function verify_gluster_mnt(){
 # 5) umount vol if mounted
 # 6) unmount brick_mnt if mounted
 # 7) remove the brick and gluster mount records from /etc/fstab
-# 8) delete the LV, VG and PV.
+# 8) delete the LV, VG and PV. (--lvm only)
 # ** gluster cmd only done once for entire pool; all other cmds executed on
 #    each node
 #
 function cleanup(){
 
-  local node; local i; local out; local err; local force=''
+  local x; local node; local i; local out; local err; local force=''
   local brick="$BRICK_DEV"
 
   # unconditionally prompt before deleting files and the volume!
@@ -1138,17 +1167,13 @@ function cleanup(){
   display "  -- on node $firstNode (distributed):" $LOG_INFO
   display "       stopping $VOLNAME volume..."     $LOG_INFO
   display "       deleting $VOLNAME volume..."     $LOG_INFO
-  out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	gluster --mode=script volume stop $VOLNAME 2>&1
-	gluster --mode=script volume delete $VOLNAME 2>&1")"
-  err=$?
-  display "gluster results: $out" $LOG_DEBUG
-  verify_vol_stop_delete $err "$out"
+  stop_volume
+  delete_volume
 
   # 4) detach nodes on all but firstNode
   display "  -- from node $firstNode:" $LOG_INFO
   display "       detaching all other nodes from trusted pool..." $LOG_INFO
-  for x in {0,1}; do  # 2nd time through use force option
+  for x in {0,1}; do # 2nd time through use force option
       out=''
       (( x != 0 )) && force='force'
       for (( i=1; i<$NUMNODES; i++ )); do # starting at 1 not 0
@@ -1157,14 +1182,15 @@ function cleanup(){
 	  out+="\n"
       done
       display "peer detach: $out" $LOG_DEBUG
-      verify_peer_detach $x
-      (( $? == 0 )) && break # detached on 1st try
+      if verify_peer_detach $x ; then
+	break # detached on 1st try
+      fi
   done
 
   # 5) umount vol on every node, if mounted
   # 6) unmount brick_mnt on every node, if mounted
   # 7) remove the brick and gluster mount records from /etc/fstab
-  # 8) delete the LV, VG and PV on every node
+  # 8) delete the LV, VG and PV on every node (if --lvm)
   display "  -- on all nodes:"            $LOG_INFO
   display "       umount $GLUSTER_MNT..." $LOG_INFO
   display "       umount $BRICK_DIR..."   $LOG_INFO
@@ -1226,6 +1252,8 @@ function create_trusted_pool(){
 }
 
 # brick_dirs_mnt: invoked by setup(). For each node do:
+# - set up xfs on lv-brick-dev on every node (needed here rather in prep_node
+#     so that combo of --_clean followed by --_setup works)
 # - mkdir brick_dir and vol_mnt on every node
 # - append brick_dir and gluster mount entries to fstab on every node
 # - mount brick on every node
@@ -1234,12 +1262,12 @@ function create_trusted_pool(){
 #
 function brick_dirs_mnt(){
 
-  local out; local node; local i
-  local brick="$BRICK_DEV"; local mgmt_node
+  local out; local node; local i; local err
+  local XFS_SIZE=512
+  local brick="$BRICK_DEV"
   local BRICK_MNT_OPTS="noatime,inode64"
   local GLUSTER_MNT_OPTS="entry-timeout=0,attribute-timeout=0,use-readdirp=no,acl,_netdev"
-
-  [[ -z "$MGMT_NODE_IN_POOL" ]] && mgmt_node="$MGMT_NODE" # outside of pool
+  local MNT_BUSY_ERR=32
 
   for (( i=0; i<$NUMNODES; i++ )); do
       node=${HOSTS[$i]}
@@ -1251,9 +1279,10 @@ function brick_dirs_mnt(){
         setup_vg_lv_brick "$brick"
       fi
 
-      # make brick and vol mnt dirs
+      # set up xfs, make brick and vol mnt dirs
       # note: must be done before the brick mount
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
+	    mkfs -t xfs -i size=$XFS_SIZE -f $LV_BRICK 2>&1
 	    mkdir -p $BRICK_DIR $GLUSTER_MNT 2>&1
             if [[ -d $BRICK_DIR && -d $GLUSTER_MNT ]] ; then
               echo ok
@@ -1287,11 +1316,12 @@ function brick_dirs_mnt(){
       # for the same reason.
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
 	    mount $BRICK_DIR 2>&1")" # mount via fstab
-      (( $? != 0 )) && {
+      err=$?
+      display " * brick mount: $out" $LOG_DEBUG
+      (( err != 0 && err != MNT_BUSY_ERR )) && {
 	display "ERROR on $node: mount $LV_BRICK as $BRICK_DIR: $out" \
 		$LOG_FORCE;
-	exit 45; }
-      display " * brick mount: $out" $LOG_DEBUG
+        exit 45; }
 
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
 	    mkdir -p $BRICK_MNT $MAPRED_SCRATCH_DIR 2>&1
@@ -1307,6 +1337,56 @@ function brick_dirs_mnt(){
         exit 48; }
       display " * mkdir $BRICK_MNT & $MAPRED_SCRATCH_DIR: $out" $LOG_DEBUG
   done
+}
+
+# create_volume: create the gluster volume and verify that it was created.
+# Handle the case of slow clusters by calling wait_for_glusterd.
+#
+function create_volume(){
+
+  local out; local err; local node; local bricks
+
+  # first set up bricks string
+  for node in "${HOSTS[@]}"; do
+      bricks+=" $node:$BRICK_MNT"
+  done
+
+  while true ; do
+      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+	gluster volume create $VOLNAME replica $REPLICA_CNT $bricks 2>&1")"
+      err=$?
+      display "gluster vol create(err=$err): $out" $LOG_DEBUG
+      (( err == 0 )) && break # vol create worked, exit loop
+      if ! glusterd_busy $err "$out" ; then
+echo "****** busy==false"
+	break # an error other than a transaction in progress...
+      fi
+echo "****** busy==true"
+      wait_for_glusterd
+  done
+  verify_vol_created $err "$bricks"
+}
+
+# start_volume: start the gluster volume and verify that it started. Handle
+# the case of slow clusters by calling wait_for_glusterd.
+#
+function start_volume(){
+
+  local out; local err
+  local EXPCT_VOL_START_ERR="Volume $VOLNAME already started"
+
+  while true ; do
+      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+  	    gluster --mode=script volume start $VOLNAME $force 2>&1")"
+      err=$?
+      display "gluster vol start(err=$err): $out" $LOG_DEBUG
+      (( err == 0 )) && break # vol start worked, exit loop
+      if ! glusterd_busy $err "$out" ; then
+	break # an error other than a transaction in progress...
+      fi
+      wait_for_glusterd
+  done
+  verify_vol_started
 }
 
 # mount_volume: on the passed-in node, mount the hadoop volume and verify that
@@ -1446,7 +1526,7 @@ function create_hadoop_dirs(){
 #
 function setup(){
 
-  local x; local last_try=false; local i=0; local node=''
+  local i=0; local node=''
   local out; local err; local force=''
   local bricks=''
   local dir; local perm; local owner; local uid
@@ -1470,37 +1550,19 @@ function setup(){
     # 6) create trusted pool from first node
     # 7) create vol on a single node
     # 8) start vol on a single node
-    # 9) mount vol on every node
     display "  -- on $firstNode node (distributed):"  $LOG_INFO
     display "       creating trusted pool..."         $LOG_INFO
     display "       creating $VOLNAME volume..."      $LOG_INFO
     display "       starting $VOLNAME volume..."      $LOG_INFO
-    display "  -- mount $GLUSTER_MNT on all nodes..." $LOG_INFO
     create_trusted_pool
     verify_pool_created
+    # create the volume and verify
+    create_volume
+    # start the volume and verify
+    start_volume
 
-    # create vol
-    # first set up bricks string
-    for node in "${HOSTS[@]}"; do
-        bricks+=" $node:$BRICK_MNT"
-    done
-    out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	gluster volume create $VOLNAME replica $REPLICA_CNT $bricks 2>&1")"
-    err=$?
-    display "vol create: $out" $LOG_DEBUG
-    verify_vol_created $err "$bricks"
-
-    # start vol
-    for x in $(seq 4); do  # last time through use force option
- 	(( x == 4 )) && { last_try=true; force='force'; }
-	out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-  	      gluster --mode=script volume start $VOLNAME $force 2>&1")"
-	err=$?
-	display "vol start: $out" $LOG_DEBUG
-	verify_vol_started $last_try $err
-	(( $? == 0 )) && break # vol started
-    done
-
+    # 9) mount vol on every node
+    display "  -- mount $GLUSTER_MNT on all nodes..." $LOG_INFO
     # ownership and permissions must be set *after* the gluster vol is mounted
     for node in "${HOSTS[@]}"; do
 	display "-- $node -- mount volume" $LOG_INFO
@@ -1549,7 +1611,6 @@ function setup(){
 #
 function install_nodes(){
 
-  REBOOT_NODES=() # global
   local out; local i; local node; local ip
   local install_mgmt_node; local brick="$BRICK_DEV"
   local LOCAL_PREP_LOG_DIR='/var/tmp/'
@@ -1571,8 +1632,7 @@ function install_nodes(){
 
     local node="$1"; local ip="$2" local install_storage="$3"
     local install_mgmt="$4"; local brick="$5"
-    local err
-    local ssh_target
+    local err; local ssh_target
     [[ $USING_DNS == true ]] && ssh_target=$node || ssh_target=$ip
 
     # start with an empty remote install dir
@@ -1714,8 +1774,10 @@ function reboot_nodes(){
 #
 function perf_config(){
 
-  local out; local i=0; local SLEEP=5; local LIMIT=$((NUMNODES * 2))
+  local out; local err; local i=0
+  local SLEEP=5; local LIMIT=$((NUMNODES * 2))
   local LAST_N=3 # tail records containing vol settings (vol info cmd)
+  local TAG='Options Reconfigured:'
   local PREFETCH='performance.stat-prefetch'
   local EAGERLOCK='cluster.eager-lock'
   local QUICKREAD='performance.quick-read'
@@ -1725,16 +1787,31 @@ function perf_config(){
 		       [$EAGERLOCK]='on' \
 		       [$QUICKREAD]='off')
 
-  out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	gluster vol set $VOLNAME $QUICKREAD ${settings[$QUICKREAD]} 2>&1
-	gluster vol set $VOLNAME $EAGERLOCK ${settings[$EAGERLOCK]} 2>&1
-	gluster vol set $VOLNAME $PREFETCH  ${settings[$PREFETCH]}  2>&1")"
-  display "gluster volume set: $out" $LOG_DEBUG
+  for setting in ${!settings[@]}; do
+      while true ; do
+	  out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+		gluster vol set $VOLNAME $setting ${settings[$setting]} 2>&1")"
+	  err=$?
+	  display "gluster volume set $setting(err=$err): $out" $LOG_DEBUG
+	  (( err == 0 )) && break # vol set worked, exit loop
+	  if ! glusterd_busy $err "$out" ; then
+	    break # an error other than a transaction in progress...
+	  fi
+	  wait_for_glusterd
+      done
+  done
 
+  # verify settings
   while (( i < LIMIT )) ; do # don't loop forever
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
-	    gluster volume info $VOLNAME | tail -n $LAST_N")"
-      if (( $? == 0 )) ; then
+	    gluster volume info $VOLNAME >volinfo.out
+	    remote_err=\$?
+	    if (( remote_err == 0 )) ; then
+	      sed -e '1,/$TAG/d' volinfo.out # output from tag to eof
+	    fi
+	    exit \$remote_err")"
+      err=$?
+      if (( err == 0 )) ; then
 	out=($(echo ${out//: /:}))
 	errcnt=0
 	for setting in ${out[@]} ; do # "perf-key:value" list
@@ -1799,7 +1876,7 @@ init_dynamic_globals
 ## start tasks: ##
 (( DO_REPORT )) && report_deploy_values
 
-(( DO_VALIDATE )) && validate_nodes # prompts and may exit
+(( DO_VALIDATE )) && validate_nodes ## NOT IMPLEMENTED! prompts and may exit
 
 # per-node install and config...
 (( DO_PREP )) && install_nodes

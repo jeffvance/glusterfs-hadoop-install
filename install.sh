@@ -154,9 +154,12 @@ function yesno(){
 	 [Yy][Ee][Ss]) return 0;;
 	 [Nn])         return 1;;
 	 [Nn][Oo])     return 1;;
-	 *) # default
+	 '') # default
 	   [[ "$default" != 'y' ]] && return 1 || return 0
          ;;
+	 *) # unexpected...
+	   echo "Expecting a yes/no response, not \"$yn\""
+	 ;;
        esac
    done
 }

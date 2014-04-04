@@ -1093,7 +1093,7 @@ function stop_volume(){
   verify_vol_stopped
 }
 
-# delete_volume: sdelete the volume and verify that it was deleted. Also,
+# delete_volume: delete the volume and verify that it was deleted. Also,
 # handles slow clusters in a loop calling wait_for_clusterd.
 #
 function delete_volume(){

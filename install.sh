@@ -735,12 +735,12 @@ function wait_for_glusterd(){
 	    gluster volume status $VOLNAME 2>&1")"
       err=$?
       if ! glusterd_busy "$out" ; then
-	break # not above errors so exit loop
+	break # not "busy" error so exit loop
       fi
       sleep $SLEEP
-     display "...cluster slow(volstatus=$err), wait $((i*SLEEP)) secs" \
+      display "...cluster slow(volstatus=$err), wait $((i*SLEEP)) seconds" \
 	$LOG_DEBUG
-     ((i++))
+      ((i++))
   done
 
   ((i--))

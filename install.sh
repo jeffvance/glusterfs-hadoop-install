@@ -708,18 +708,14 @@ function start_gluster(){
 }
 
 # glusterd_busy: return 0 is there is a transaction in progress or staging 
-# failed, else return 1.
-# Args 1=errno from previous cmd; 2=error msg from previous gluster cmd.
+# failed, else return 1. Args 1=error msg from previous gluster cmd.
 #
 function glusterd_busy(){
 
-  local err=$1; local msg="$2"
-  local SSH_DELAY=146
+  local msg="$1"
   local TRANS_IN_PROGRESS='Another transaction is in progress'
   local STAGING_FAILED='Staging failed on'
 
-  (( err == SSH_DELAY )) && return 0 # true
-echo "********busy msg=$msg"
   grep -qs -E "$TRANS_IN_PROGRESS|$STAGING_FAILED" <<<"$msg"
 }
 
@@ -732,18 +728,19 @@ echo "********busy msg=$msg"
 #
 function wait_for_glusterd(){
 
-  local i=1; local err; local out; local SLEEP=5
+  local i=1; local err; local out; local SLEEP=10
 
   while true ; do # until an earlier transaction has completed...
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
 	    gluster volume status $VOLNAME 2>&1")"
       err=$?
-      if ! glusterd_busy $err "$out" ; then
+      if ! glusterd_busy "$out" ; then
 	break # not above errors so exit loop
       fi
       sleep $SLEEP
+     display "...cluster slow(volstatus=$err), wait $((i*SLEEP)) secs" \
+	$LOG_DEBUG
      ((i++))
-     display "...cluster slow, waiting $((i*SLEEP)) seconds" $LOG_DEBUG
   done
 
   ((i--))
@@ -994,7 +991,6 @@ function verify_vol_created(){
 	  exit 1
 	fi")"
 	err=$?
-echo "********** verify create: err=$err, out=$out"
       if (( err == 0 )) && grep -qs -E "$VOL_CREATED|$VOL_STARTED" <<<$out; then
  	break
       fi
@@ -1084,12 +1080,12 @@ function stop_volume(){
   local out; local err
 
   while true ; do
-     out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
+      out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
 	   gluster --mode=script volume stop $VOLNAME 2>&1")"
       err=$?
       display "gluster vol stop(err=$err): $out" $LOG_DEBUG
       (( err == 0 )) && break # vol stop worked, exit loop
-      if ! glusterd_busy $err "$out" ; then
+      if ! glusterd_busy "$out" ; then
 	break # an error other than a transaction in progress...
       fi
       wait_for_glusterd
@@ -1110,7 +1106,7 @@ function delete_volume(){
       err=$?
       display "gluster vol delete(err=$err): $out" $LOG_DEBUG
       (( err == 0 )) && break # vol delete worked, exit loop
-      if ! glusterd_busy $err "$out" ; then
+      if ! glusterd_busy "$out" ; then
 	break # an error other than a transaction in progress...
       fi
       wait_for_glusterd
@@ -1357,11 +1353,9 @@ function create_volume(){
       err=$?
       display "gluster vol create(err=$err): $out" $LOG_DEBUG
       (( err == 0 )) && break # vol create worked, exit loop
-      if ! glusterd_busy $err "$out" ; then
-echo "****** busy==false"
+      if ! glusterd_busy "$out" ; then
 	break # an error other than a transaction in progress...
       fi
-echo "****** busy==true"
       wait_for_glusterd
   done
   verify_vol_created $err "$bricks"
@@ -1373,7 +1367,6 @@ echo "****** busy==true"
 function start_volume(){
 
   local out; local err
-  local EXPCT_VOL_START_ERR="Volume $VOLNAME already started"
 
   while true ; do
       out="$(ssh -oStrictHostKeyChecking=no root@$firstNode "
@@ -1381,7 +1374,7 @@ function start_volume(){
       err=$?
       display "gluster vol start(err=$err): $out" $LOG_DEBUG
       (( err == 0 )) && break # vol start worked, exit loop
-      if ! glusterd_busy $err "$out" ; then
+      if ! glusterd_busy "$out" ; then
 	break # an error other than a transaction in progress...
       fi
       wait_for_glusterd
@@ -1794,10 +1787,11 @@ function perf_config(){
 	  err=$?
 	  display "gluster volume set $setting(err=$err): $out" $LOG_DEBUG
 	  (( err == 0 )) && break # vol set worked, exit loop
-	  if ! glusterd_busy $err "$out" ; then
+	  if ! glusterd_busy "$out" ; then
 	    break # an error other than a transaction in progress...
 	  fi
 	  wait_for_glusterd
+	  display "   re-try $setting..." $LOG_DEBUG
       done
   done
 

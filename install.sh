@@ -217,7 +217,9 @@ EOF
                        may be included in the local "hosts" file, per node. If 
                        specified on the command line then the same brick-dev
                        applies to all nodes.
-  --brick_mnt <path> : Brick directory. Default: "/mnt/brick1/<volname>".
+  --brick-mnt <path> : Brick directory. Default: "/mnt/brick1/". Note: the
+                       vol-name is appended to the brick-mnt when forming the
+                       volume's brick name.
   --vol-name  <name> : Gluster volume name. Default: "HadoopVol".
   --vol-mnt   <path> : Gluster mount point. Default: "/mnt/glusterfs".
   --replica   <num>  : Volume replication count. The number of storage nodes

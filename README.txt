@@ -11,10 +11,12 @@
 
   The installation script is simple to execute:
   - ./install.sh --help  # to learn about the various options,
-  - ./install.sh [brick-device], eg:
-       ./install.sh /dev/TestVG/LV101
-  - ./install.sh --lvm --vgname --lvname brick-dev, eg:
-       ./install.sh --lvm --vgname MyVG --lvname MyLV /dev/sdb
+  - ./install.sh --mgmt-node <node> --yarn-master <node> [brick-device], eg:
+       ./install.sh --mgmt-node mgmt --yarn-master yarn /dev/TestVG/LV101
+  - ./install.sh --mgmt-node=foo --yarn-master=bar --lvm \
+                 --vgname --lvname raw-block-dev, eg:
+       ./install.sh mgmt-node=foo --yarn-master=bar --lvm \
+                 --vgname MyVG --lvname MyLV /dev/sdb
   - examine the log file in /var/log/glusterfs-hadoop-install.log, or in
        /var/log/rhs-hadoop-install.log for RHS.
 
@@ -90,7 +92,7 @@ Instructions:
  3) execute the common "install.sh" from the install directory:
     $ ./install.sh [options (see --help)] <brick-dev> (see hosts.example for
                                                        more on brick-dev)
-    For example: ./install.sh /dev/sdb
+    For example: ./install.sh --mgmt-node=one --yarn-master=two /dev/sdb
 
     Output is displayed on STDOUT and is also written to a logfile. The default
     logfile is: /var/log/<glusterfs|rhs>-hadoop-install.log. The --logfile

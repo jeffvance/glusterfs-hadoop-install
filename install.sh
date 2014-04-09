@@ -1752,17 +1752,35 @@ function install_nodes(){
 
   # if the mgmt or yarn nodes are not in the storage pool (not in hosts file)
   # then execute prep_node again in case there are management specific tasks.
-  if [[ -z "$MGMT_NODE_IN_POOL" ]] ; then
-    echo
-    display 'Mgmt node is not a storage node thus mgmt code needs to be installed...' $LOG_INFO
-    display "-- Starting install of management node \"$MGMT_NODE\"" $LOG_DEBUG
-    prep_node $MGMT_NODE $MGMT_NODE false true null null # (no brick)
+  node="$MGMT_NODE"
+  do_mgmt=false; do_yarn=false; do_both=false
+  if [[ -z "$MGMT_NODE_IN_POOL" && -z "$YARN_NODE_IN_POOL" ]] ; then
+    # both nodes are outside of storage pool
+    if [[ "$MGMT_NODE" == "$YARN_NODE" ]] ; then
+      do_both=true
+    else # both outside of pool but different nodes (recommended config)
+      do_mgmt=true; do_yarn=true
+    fi
+  elif [[ -z "$MGMT_NODE_IN_POOL" ]] ; then # only mgmt node is outside of pool
+    do_mgmt=true
+  else # only yarn-master node is outside of pool
+    do_yarn=true
   fi
-  if [[ -z "$YARN_NODE_IN_POOL" ]] ; then
-    echo
-    display 'Yarn-master node is not a storage node thus mgmt code needs to be installed...' $LOG_INFO
-    display "-- Starting install of management node \"$MGMT_NODE\"" $LOG_DEBUG
-    prep_node $MGMT_NODE $MGMT_NODE false true null null # (no brick)
+  if [[ $do_both == true ]] ; then
+    display 'Mgmt and yarn-master are the same nodes but not in the storage pool and thus need to be installed...' $LOG_INFO
+    display "-- Starting install of mgmt node ($MGMT_NODE) and yarn-master ($YARN_NODE)" $LOG_DEBUG
+    prep_node $node $node false true true null # no bricks
+  else 
+    if [[ $do_mgmt == true ]] ; then
+      display 'Mgmt node is not in the storage pool and thus needs to be installed...' $LOG_INFO
+      display "-- Starting install of mgmt node ($MGMT_NODE)" $LOG_DEBUG
+      prep_node $node $node false true false null # no bricks
+    fi
+    if [[ $do_yarn == true ]] ; then
+      display 'Yarn-master node is not in the storage pool and thus needs to be installed...' $LOG_INFO
+      display "-- Starting install of yarn-master ($YARN_NODE)" $LOG_DEBUG
+      prep_node $YARN_NODE $YARN_NODE false false true null # no bricks
+    fi
   fi
 }
 

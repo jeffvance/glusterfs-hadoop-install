@@ -27,7 +27,7 @@
 initialize_globals(){
 
   SCRIPT=$(basename $0)
-  INSTALL_VER='0.85' # self version
+  INSTALL_VER='0.86' # self version
 
   # flag if we're doing an rhs related install, set before parsing args
   [[ -d glusterfs ]] && RHS_INSTALL=false || RHS_INSTALL=true
@@ -96,6 +96,7 @@ initialize_globals(){
 
   # misc
   MGMT_NODE=''
+  YARN_NODE=''
   REBOOT_NODES=()
   VERBOSE=$LOG_SUMMARY
   ANS_YES='n' # for -y option
@@ -175,8 +176,9 @@ Syntax:
 
 $SCRIPT [-v|--version] | [-h|--help]
 
-$SCRIPT [--brick-mnt <path>] [--vol-name <name>]  [--vol-mnt <path>]
-           [--replica <num>]    [--hosts <path>]     [--mgmt-node <node>]
+$SCRIPT --mgmt-node <node>   --yarn-master <node>
+           [--brick-mnt <path>] [--vol-name <name>]  [--vol-mnt <path>]
+           [--replica <num>]    [--hosts <path>]
            [--vg-name <name>]   [--lv-name <name>]   [--lvm]
            [--logfile <path>]   [-y]
            [--verbose [num] ]   [-q|--quiet]         [--debug]
@@ -217,6 +219,12 @@ EOF
                        may be included in the local "hosts" file, per node. If 
                        specified on the command line then the same brick-dev
                        applies to all nodes.
+  --mgmt-node <node> : Required. hostname of the node to be used as the
+                       hadoop management node. Recommended to be a server
+                       outside of the storage pool.
+  --yarn-master <node>: Required. hostname of the node to be used as the yarn
+                       master node. Recommended to be a server outside of the
+                       storage pool.
   --brick-mnt <path> : Brick directory. Default: "/mnt/brick1/". Note: the
                        vol-name is appended to the brick-mnt when forming the
                        volume's brick name.
@@ -227,8 +235,6 @@ EOF
   --hosts     <path> : path to \"hosts\" file. This file contains a list of
                        "IP-addr hostname" pairs for each node in the cluster.
                        Default: "./hosts".
-  --mgmt-node <node> : hostname of the node to be used as the management node.
-                       Default: the first node appearing in the "hosts" file.
   --lvm              : create a simple LVM setup based on the raw brick-dev, and
                        the passed-in or default VG and LV names. Default is to
                        not create a logical volume from the brick-dev, in which
@@ -267,7 +273,7 @@ EOF
 function parse_cmd(){
 
   local OPTIONS='vhqy'
-  local LONG_OPTS='vg-name:,lv-name:,brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,logfile:,verbose::,help,version,quiet,debug,_prep,_clean,_setup,_brick-dirs,lvm,_vol,_hadoop-dirs,_users,_perf,_validate'
+  local LONG_OPTS='vg-name:,lv-name:,brick-mnt:,vol-name:,vol-mnt:,replica:,hosts:,mgmt-node:,yarn-master:,logfile:,verbose::,help,version,quiet,debug,_prep,_clean,_setup,_brick-dirs,lvm,_vol,_hadoop-dirs,_users,_perf,_validate'
   local task_opt_seen=false
 
   # note: $? *not* set for invalid option errors!
@@ -310,6 +316,9 @@ function parse_cmd(){
 	;;
 	--mgmt-node)
 	    MGMT_NODE=$2; shift 2; continue
+	;;
+	--yarn-master)
+	    YARN_NODE=$2; shift 2; continue
 	;;
 	--logfile)
 	    LOGFILE=$2; shift 2; continue
@@ -414,16 +423,17 @@ function parse_cmd(){
 }
 
 # check_cmdline: check for missing or conflicting command line options/args.
-# exit -1 on errors.
+# Accumulate errors and if any then exit -1.
 #
 function check_cmdline(){
 
   local RAW_BLOCK_DEV_RE='/dev/[msv]d[a-z]*[0-9]*$'
+  local errcnt=0
 
   # validate replica cnt for RHS
   if (( REPLICA_CNT != 2 )) ; then
     echo "ERROR: replica = 2 is the only supported value"
-    exit -1
+    ((errcnt++))
   fi
 
   # since a brick-dev is optional in the local hosts file, verify that we
@@ -431,10 +441,20 @@ function check_cmdline(){
   # but not both
   if [[ -z "$BRICK_DEV" && ${#BRICKS} == 0 ]] ; then
     echo -e "ERROR: a brick device path is required either as an arg to $SCRIPT or in\nthe local $HOSTS_FILE hosts file"
-    exit -1
+    ((errcnt++))
   elif [[ -n "$BRICK_DEV" && ${#BRICKS}>0 ]] ; then
     echo -e "ERROR: a brick device path can be provided either as an arg to $SCRIPT or\nin the local $HOSTS_FILE hosts file, but not in both"
-    exit -1
+    ((errcnt++))
+  fi
+
+  # require that --mgmt-node and --yarn-master are specified
+  if [[ -z "$MGMT_NODE" ]] ; then
+    echo "ERROR: the management node (--mgmt-node) is required"
+    ((errcnt++))
+  fi
+  if [[ -z "$YARN_NODE" ]] ; then
+    echo "ERROR: the yarn-master node (--yarn-master) is required"
+    ((errcnt++))
   fi
 
   # lvm checks
@@ -444,17 +464,19 @@ function check_cmdline(){
     if [[ $LVM == false ]] ; then # brick-dev is expected to be /dev/vg/lv
       if [[ "$VG_NAME" != "$VG_DEFAULT" || "$LV_NAME" != "$LV_DEFAULT" ]]; then
 	echo "ERROR: cannot use --vg-name and/or --lv-name without also specifying --lvm"
-	exit -1
+	((errcnt++))
       fi
       if [[ "$BRICK_DEV" =~ $RAW_BLOCK_DEV_RE ]] ; then
 	echo "ERROR: expect a logical volume (LV) brick path, e.g. /dev/VG/LV"
-	exit -1
+	((errcnt++))
       fi
     elif [[ ! "$BRICK_DEV" =~ $RAW_BLOCK_DEV_RE ]] ; then # LVM==true
       echo "ERROR: expect a raw block brick device path, e.g. /dev/sdb"
-      exit -1
+      ((errcnt++))
     fi
   fi
+
+  (( errcnt > 0 )) && exit -1
 }
 
 # report_deploy_values: write out args and default values to be used in this
@@ -537,6 +559,7 @@ function report_deploy_values(){
   display "  Using DNS:          $USING_DNS"        $LOG_REPORT
   display "  Number of nodes:    $NUMNODES"         $LOG_REPORT
   display "  Management node:    $MGMT_NODE"        $LOG_REPORT
+  display "  Yarn master node:   $YARN_NODE"        $LOG_REPORT
   display "  Volume name:        $VOLNAME"          $LOG_REPORT
   display "  Number of replicas: $REPLICA_CNT"      $LOG_REPORT
   display "  Volume mount:       $GLUSTER_MNT"      $LOG_REPORT
@@ -771,19 +794,20 @@ function setup_vg_lv_brick(){
 }
 
 # verify_hadoop_gid: check that the gid for the passed-in group is the same on
-# all nodes. Note: the mgmt-node, if outside of the storage pool, needs to be
-# included in the consistency test.
+# all nodes. Note: the mgmt- and yarn-master nodes, if outside of the storage
+# pool, need to be included in the consistency test.
 # Args: $1=group name
 #
 function verify_hadoop_gid(){
 
   local grp="$1"
-  local node; local i; local out; local gid; local mgmt_node=''
+  local node; local i; local out; local gid; local extra_node=''
   local gids=(); local uniq_gids=(); local nodes=()
 
-  [[ -z "$MGMT_NODE_IN_POOL" ]] && mgmt_node="$MGMT_NODE" # outside of pool
+  [[ -z "$MGMT_NODE_IN_POOL" ]] && extra_node+="$MGMT_NODE "
+  [[ -z "$YARN_NODE_IN_POOL" ]] && extra_node+="$YARN_NODE "
 
-  for node in ${HOSTS[@]} $mgmt_node ; do
+  for node in ${HOSTS[@]} $extra_node ; do
       out="$(ssh -oStrictHostKeyChecking=no root@$node "getent group $grp")"
       if (( $? != 0 )) || [[ -z "$out" ]] ; then
 	display "ERROR: group $grp not created on $node" $LOG_FORCE
@@ -807,22 +831,23 @@ function verify_hadoop_gid(){
 }
 
 # verify_user_uids: check that the uid for the passed-in user(s) is the same
-# on all nodes. Note: the mgmt-node, if outside the trusted pool, needs to be
-# included in the consistency check.
+# on all nodes. Note: the mgmt- and yarn-master nodes, if outside the trusted 
+# pool, need to be included in the consistency check.
 # Args: $@=user names
 #
 function verify_user_uids(){
 
   local users=($@)
   local node; local i; local out; local errcnt=0
-  local user; local mgmt_node=''
+  local user; local extra_node=''
   local uids; local uniq_uids; local nodes
 
-  [[ -z "$MGMT_NODE_IN_POOL" ]] && mgmt_node="$MGMT_NODE" # outside of pool
+  [[ -z "$MGMT_NODE_IN_POOL" ]] && extra_node+="$MGMT_NODE "
+  [[ -z "$YARN_NODE_IN_POOL" ]] && extra_node+="$YARN_NODE "
 
   for user in "${users[@]}" ; do
      uids=(); nodes=()
-     for node in ${HOSTS[@]} $mgmt_node ; do
+     for node in ${HOSTS[@]} $extra_node ; do
 	out="$(ssh -oStrictHostKeyChecking=no root@$node "id -u $user")"
 	if (( $? != 0 )) || [[ -z "$out" ]] ; then
 	  display "ERROR: user $user not created on $node" $LOG_FORCE
@@ -1405,17 +1430,19 @@ function mount_volume(){
 }
 
 # create_hadoop_group: create the passed-in group if it does not already exist.
-# Note: the mgmt-node, if outside the storage pool, needs to be included.
+# Note: the mgmt- and yarn-master nodes, if outside the storage pool, need to
+# be included.
 # Args: $1=hadoop group name
 #
 function create_hadoop_group(){
 
   local grp="$1"
-  local node; local out; local err; local mgmt_node=''
+  local node; local out; local err; local extra_node=''
 
-  [[ -z "$MGMT_NODE_IN_POOL" ]] && mgmt_node="$MGMT_NODE" # outside of pool
+  [[ -z "$MGMT_NODE_IN_POOL" ]] && extra_node+="$MGMT_NODE "
+  [[ -z "$YARN_NODE_IN_POOL" ]] && extra_node+="$YARN_NODE "
 
-  for node in ${HOSTS[@]} $mgmt_node; do
+  for node in ${HOSTS[@]} $extra_node; do
       # create hadoop group, if needed
       out="$(ssh -oStrictHostKeyChecking=no root@$node "
 	if ! getent group $grp >/dev/null ; then
@@ -1431,19 +1458,20 @@ function create_hadoop_group(){
 }
 
 # create_hadoop_users: create the passed-in hadoop users on all nodes. Note: if
-# the mgmt-node is outside of the trusted pool then it needs to be included as
-# one of the nodes where users are added.
+# the mgmt- and yarn-master nodes are outside of the trusted pool then they
+# need to be included as one of the nodes where users are added.
 # Args: $1=hadoop group name, $2 *name* of array of YARN/MR users
 #
 function create_hadoop_users(){
 
   local grp="$1"; local user_names="$2"
   local users=("${!user_names}") # array of user names
-  local node; local out; local user; local mgmt_node=''
+  local node; local out; local user; local extra_node=''
 
-  [[ -z "$MGMT_NODE_IN_POOL" ]] && mgmt_node="$MGMT_NODE" # outside of pool
+  [[ -z "$MGMT_NODE_IN_POOL" ]] && extra_node+="$MGMT_NODE "
+  [[ -z "$YARN_NODE_IN_POOL" ]] && extra_node+="$YARN_NODE "
 
-  for node in ${HOSTS[@]} $mgmt_node; do
+  for node in ${HOSTS[@]} $extra_node; do
       # create the required M/R-YARN users, if needed
       for user in "${users[@]}" ; do
 	  out="$(ssh -oStrictHostKeyChecking=no root@$node "
@@ -1610,8 +1638,8 @@ function setup(){
 function install_nodes(){
 
   local out; local i; local node; local ip
-  local install_mgmt_node; local brick="$BRICK_DEV"
-  local LOCAL_PREP_LOG_DIR='/var/tmp/'
+  local install_mgmt_node; local install_yarn_node
+  local brick="$BRICK_DEV"; local LOCAL_PREP_LOG_DIR='/var/tmp/'
   # list of files to copy to node, exclude devutils/
   local FILES_TO_CP="$(find ./* -path ./devutils -prune -o -print)"
 
@@ -1623,13 +1651,13 @@ function install_nodes(){
   # node then the global reboot-needed variable is set. If an unexpected error
   # code is returned then this function exits.
   # Args: $1=hostname, $2=node's ip (can be hostname if ip is unknown),
-  #       $3=flag to install storage node, $4=flag to install the mgmt node.
-  #       $5=brick-dev (or null)
+  #   $3=flag to install storage node, $4=flag to install the mgmt node,
+  #   $5=flag to install yarn-master node, $6=brick-dev (or null).
   #
   function prep_node(){
 
     local node="$1"; local ip="$2" local install_storage="$3"
-    local install_mgmt="$4"; local brick="$5"
+    local install_mgmt=$4; local install_yarn=$5; local brick="$6"
     local err; local ssh_target
     [[ $USING_DNS == true ]] && ssh_target=$node || ssh_target=$ip
 
@@ -1661,7 +1689,8 @@ function install_nodes(){
 	[BRICK_DEV]="$brick" [LV_BRICK]="$LV_BRICK" [BRICK_DIR]="$BRICK_DIR" \
 	[VG_NAME]="$VG_NAME" [LV_NAME]="$LV_NAME" \
 	[INST_STORAGE]="$install_storage" [INST_MGMT]="$install_mgmt" \
-	[MGMT_NODE]="$MGMT_NODE" [VERBOSE]="$VERBOSE" \
+	[INST_YARN]="$install_yarn" [MGMT_NODE]="$MGMT_NODE" \
+	[YARN_NODE]="$YARN_NODE" [VERBOSE]="$VERBOSE" \
 	[PREP_LOG]="$PREP_NODE_LOG_PATH" [REMOTE_DIR]="$REMOTE_INSTALL_DIR" \
 	[USING_DNS]=$USING_DNS [LVM]="$LVM")
     out="$(ssh -oStrictHostKeyChecking=no root@$ssh_target $REMOTE_PREP_SH \
@@ -1709,22 +1738,31 @@ function install_nodes(){
       display '--------------------------------------------' $LOG_SUMMARY
       display
       install_mgmt_node=false
+      install_yarn_node=false
       [[ -n "$MGMT_NODE_IN_POOL" && "$node" == "$MGMT_NODE" ]] && \
 	install_mgmt_node=true
-      prep_node $node $ip true $install_mgmt_node $brick
+      [[ -n "$YARN_NODE_IN_POOL" && "$node" == "$YARN_NODE" ]] && \
+	install_yarn_node=true
+      prep_node $node $ip true $install_mgmt_node $install_yarn_node $brick
 
       display '-------------------------------------------------' $LOG_SUMMARY
       display "-- Done installing on $node ($ip)"                 $LOG_SUMMARY
       display '-------------------------------------------------' $LOG_SUMMARY
   done
 
-  # if the mgmt node is not in the storage pool (not in hosts file) then
-  # execute prep_node again in case there are management specific tasks.
+  # if the mgmt or yarn nodes are not in the storage pool (not in hosts file)
+  # then execute prep_node again in case there are management specific tasks.
   if [[ -z "$MGMT_NODE_IN_POOL" ]] ; then
     echo
-    display 'Management node is not a datanode thus mgmt code needs to be installed...' $LOG_INFO
+    display 'Mgmt node is not a storage node thus mgmt code needs to be installed...' $LOG_INFO
     display "-- Starting install of management node \"$MGMT_NODE\"" $LOG_DEBUG
-    prep_node $MGMT_NODE $MGMT_NODE false true null # (no brick)
+    prep_node $MGMT_NODE $MGMT_NODE false true null null # (no brick)
+  fi
+  if [[ -z "$YARN_NODE_IN_POOL" ]] ; then
+    echo
+    display 'Yarn-master node is not a storage node thus mgmt code needs to be installed...' $LOG_INFO
+    display "-- Starting install of management node \"$MGMT_NODE\"" $LOG_DEBUG
+    prep_node $MGMT_NODE $MGMT_NODE false true null null # (no brick)
   fi
 }
 

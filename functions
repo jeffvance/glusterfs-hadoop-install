@@ -84,7 +84,7 @@ function match_dir(){
 # place. Collect all detected setup errors together (rather than one at a time)
 # for better usability. Validate format and size of hosts file. Verify
 # connectivity between localhost and each data/storage node. Assign global
-# HOSTS, HOST_IPS, and MGMT_NODE variables.
+# variables.
 #
 # Args:
 #   $1=false means to skip various checks that are needed by install.sh but are
@@ -113,9 +113,10 @@ function verify_local_deploy_setup(){
   # count. Downcase host names if they are upper case.
   # Expects the following global variables to already be set:
   #   HOSTS_FILE  -- name of local hosts file. Can be set by --hosts option
-  #                  otherwise expected to be $PWD/hosts.
-  #   MGMT_NODE   -- name of management node, if supplied.
-  #   LOG_DEBUG   -- verbose setting.
+  #                  otherwise expected to be $PWD/hosts,
+  #   MGMT_NODE   -- name of management node,
+  #   YARN_NODE   -- name of yarn-master node,
+  #   LOG_DEBUG   -- verbose setting,
   #   LOG_FORCE   -- verbose setting.
   #
   # Sets the folowing global variables:
@@ -124,8 +125,8 @@ function verify_local_deploy_setup(){
   #   BRICKS()
   #   USING_DNS, true or false, depending on content of local ./hosts file
   #   NUMNODES
-  #   MGMT_NODE (set only if not supplied as --mgmt-node option)
   #   MGMT_NODE_IN_POOL (set only if true, false == not set)
+  #   YARN_NODE_IN_POOL (set only if true, false == not set)
   # 
   function read_verify_local_hosts_file(){
 
@@ -202,21 +203,21 @@ function verify_local_deploy_setup(){
 	  display "   ...down-casing $host" $LOG_DEBUG
 	  host=${host,,} # down-case
 	fi
+
 	# validate basic hostname syntax
  	if [[ "$verify_arg" == true && ! $host =~ $VALID_HOSTNAME_RE ]] ; then
 	  errmsg+=" * $HOSTS_FILE record $lineNum:\n   Unexpected hostname syntax for \"$host\"\n"
 	  ((errcnt++))
 	  break # exit loop
         fi
+
 	# if ssh target is not already an ip then set it to host
 	[[ -z "$ssh_target" ]] && ssh_target="$host"
-        # set MGMT_NODE to first node unless --mgmt-node specified
-	if [[ -z "$MGMT_NODE" && $lineNum == 1 ]] ; then
-	  MGMT_NODE="$host"
-          MGMT_NODE_IN_POOL=true
-	elif [[ -n "$MGMT_NODE" && "$MGMT_NODE" == "$host" ]] ; then
-          MGMT_NODE_IN_POOL=true
-        fi
+
+	# set *_IN_POOL globals 
+	[[ "$MGMT_NODE" == "$host" ]] && MGMT_NODE_IN_POOL=true
+	[[ "$YARN_NODE" == "$host" ]] && YARN_NODE_IN_POOL=true
+
 	if [[ "$verify_arg" == true ]] ; then
           # verify connectivity from localhost to data node. Note: ip used since
 	  # /etc/hosts may not be set up to map ip to hostname

@@ -1554,7 +1554,6 @@ function setup(){
 
   local i=0; local node=''
   local out; local err; local force=''
-  local bricks=''
   local dir; local perm; local owner; local uid
   local MR_USERS=("$MAPRED_U" "$YARN_U" "$HBASE_U" "$HCAT_U" "$HIVE_U")
 
